@@ -1,0 +1,144 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == role;
+    }
+
+    function isStudent() {
+      return hasRole('student');
+    }
+
+    function isEmployer() {
+      return hasRole('employer');
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isValidFile(maxSizeMB, allowedTypes) {
+      return request.resource.size < maxSizeMB * 1024 * 1024 &&
+        request.resource.contentType.matches(allowedTypes);
+    }
+
+    // Resume storage rules
+    match /resumes/{studentId}/{fileName} {
+      // Students can read their own resumes
+      allow read: if isOwner(studentId);
+
+      // Employers can read resumes (when reviewing applications)
+      allow read: if isEmployer();
+
+      // Students can upload their own resumes (PDF only, max 5MB)
+      allow write: if isOwner(studentId) &&
+        isValidFile(5, 'application/pdf');
+
+      // Students can delete their own resumes
+      allow delete: if isOwner(studentId);
+
+      // Admins have full access
+      allow read, write: if isAdmin();
+    }
+
+    // Company logo storage rules
+    match /logos/{employerId}/{fileName} {
+      // Anyone can read company logos (public)
+      allow read: if true;
+
+      // Employers can upload their own logos (images only, max 2MB)
+      allow write: if isOwner(employerId) &&
+        isValidFile(2, 'image/.*');
+
+      // Employers can delete their own logos
+      allow delete: if isOwner(employerId);
+
+      // Admins have full access
+      allow read, write: if isAdmin();
+    }
+
+    // Profile pictures storage rules
+    match /profiles/{userId}/{fileName} {
+      // Users can read their own profile pictures
+      allow read: if isOwner(userId);
+
+      // Public profile pictures for employers
+      allow read: if firestore.get(/databases/(default)/documents/users/$(userId)).data.role == 'employer';
+
+      // Users can upload their own profile pictures (images only, max 2MB)
+      allow write: if isOwner(userId) &&
+        isValidFile(2, 'image/.*');
+
+      // Users can delete their own profile pictures
+      allow delete: if isOwner(userId);
+
+      // Admins have full access
+      allow read, write: if isAdmin();
+    }
+
+    // Application attachments storage rules
+    match /applications/{applicationId}/{fileName} {
+      // Students can read their own application attachments
+      allow read: if isStudent() &&
+        firestore.get(/databases/(default)/documents/applications/$(applicationId)).data.studentId == request.auth.uid;
+
+      // Employers can read attachments for applications to their jobs
+      allow read: if isEmployer() &&
+        firestore.get(/databases/(default)/documents/applications/$(applicationId)).data.employerId == request.auth.uid;
+
+      // Students can upload attachments for their applications (PDF/DOC, max 10MB)
+      allow write: if isStudent() &&
+        firestore.get(/databases/(default)/documents/applications/$(applicationId)).data.studentId == request.auth.uid &&
+        isValidFile(10, '(application/pdf|application/msword|application/vnd.openxmlformats-officedocument.wordprocessingml.document)');
+
+      // Students can delete their own attachments
+      allow delete: if isStudent() &&
+        firestore.get(/databases/(default)/documents/applications/$(applicationId)).data.studentId == request.auth.uid;
+
+      // Admins have full access
+      allow read, write: if isAdmin();
+    }
+
+    // Message attachments storage rules
+    match /messages/{conversationId}/{messageId}/{fileName} {
+      // Users can read attachments in conversations they're part of
+      allow read: if isAuthenticated() &&
+        request.auth.uid in firestore.get(/databases/(default)/documents/conversations/$(conversationId)).data.participants.map(p => p.id);
+
+      // Users can upload attachments to their messages (various formats, max 25MB)
+      allow write: if isAuthenticated() &&
+        request.auth.uid in firestore.get(/databases/(default)/documents/conversations/$(conversationId)).data.participants.map(p => p.id) &&
+        isValidFile(25, '.*');
+
+      // Attachments cannot be deleted (for audit trail)
+      allow delete: if false;
+    }
+
+    // System files storage rules
+    match /system/{path=**} {
+      // Only admins can access system files
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Temporary uploads (for processing)
+    match /temp/{userId}/{fileName} {
+      // Users can manage their own temp files
+      allow read, write: if isOwner(userId) &&
+        isValidFile(50, '.*');
+
+      // Temp files auto-deleted after 24 hours (handled by Cloud Functions)
+    }
+  }
+}
