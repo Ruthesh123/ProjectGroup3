@@ -1,5 +1,6 @@
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import { db, UserRole } from '../config/firebase';
+import { UserRecord } from 'firebase-admin/auth';
 
 interface UserProfileData {
   uid: string;
@@ -16,7 +17,7 @@ interface UserProfileData {
 }
 
 // Cloud Function triggered when a new user is created
-export const createUserProfile = functions.auth.user().onCreate(async (user) => {
+export const createUserProfile = functions.auth.user().onCreate(async (user: UserRecord) => {
   try {
     // Create default user profile
     const userProfile: UserProfileData = {

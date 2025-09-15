@@ -6,7 +6,7 @@ interface LoginRequest {
   password: string;
 }
 
-export const loginUser = async (req: Request, res: Response) => {
+export const loginUser = async (req: Request, res: Response): Promise<Response> => {
   try {
     const { email, password }: LoginRequest = req.body;
 
@@ -46,7 +46,7 @@ export const loginUser = async (req: Request, res: Response) => {
       verified: userData?.emailVerified || false
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       token: customToken,
       user: {
@@ -62,7 +62,7 @@ export const loginUser = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Login error:', error);
 
-    res.status(401).json({
+    return res.status(401).json({
       error: 'Authentication failed'
     });
   }

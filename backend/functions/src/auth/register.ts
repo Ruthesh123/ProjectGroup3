@@ -11,7 +11,7 @@ interface RegisterRequest {
   university?: string; // For students
 }
 
-export const registerUser = async (req: Request, res: Response) => {
+export const registerUser = async (req: Request, res: Response): Promise<Response> => {
   try {
     const {
       email,
@@ -87,7 +87,7 @@ export const registerUser = async (req: Request, res: Response) => {
     // TODO: Send actual email using email service
     console.log('Verification email link:', link);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'User registered successfully. Please check your email for verification.',
       uid: userRecord.uid
@@ -115,7 +115,7 @@ export const registerUser = async (req: Request, res: Response) => {
       });
     }
 
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Registration failed. Please try again.'
     });
   }

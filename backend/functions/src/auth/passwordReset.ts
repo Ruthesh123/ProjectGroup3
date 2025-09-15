@@ -5,7 +5,7 @@ interface ResetPasswordRequest {
   email: string;
 }
 
-export const resetPassword = async (req: Request, res: Response) => {
+export const resetPassword = async (req: Request, res: Response): Promise<Response> => {
   try {
     const { email }: ResetPasswordRequest = req.body;
 
@@ -21,7 +21,7 @@ export const resetPassword = async (req: Request, res: Response) => {
     // TODO: Send email with reset link
     console.log('Password reset link:', link);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Password reset email sent. Please check your inbox.'
     });
@@ -37,7 +37,7 @@ export const resetPassword = async (req: Request, res: Response) => {
       });
     }
 
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Failed to send password reset email. Please try again.'
     });
   }
