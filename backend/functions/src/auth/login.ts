@@ -1,0 +1,69 @@
+import { Request, Response } from 'express';
+import { auth, db } from '../config/firebase';
+
+interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export const loginUser = async (req: Request, res: Response) => {
+  try {
+    const { email, password }: LoginRequest = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        error: 'Email and password are required'
+      });
+    }
+
+    // Note: In production, you would validate credentials on the client
+    // and send the ID token to the server for verification
+    // This is a simplified version for development
+
+    // Get user by email to check if exists and get details
+    const userRecord = await auth.getUserByEmail(email);
+
+    if (!userRecord) {
+      return res.status(401).json({
+        error: 'Invalid email or password'
+      });
+    }
+
+    // Get user profile from Firestore
+    const userDoc = await db.collection('users').doc(userRecord.uid).get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        error: 'User profile not found'
+      });
+    }
+
+    const userData = userDoc.data();
+
+    // Create custom token
+    const customToken = await auth.createCustomToken(userRecord.uid, {
+      role: userData?.role,
+      verified: userData?.emailVerified || false
+    });
+
+    res.status(200).json({
+      success: true,
+      token: customToken,
+      user: {
+        uid: userRecord.uid,
+        email: userRecord.email,
+        displayName: userRecord.displayName,
+        role: userData?.role,
+        emailVerified: userRecord.emailVerified,
+        profileComplete: userData?.profileComplete || false
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Login error:', error);
+
+    res.status(401).json({
+      error: 'Authentication failed'
+    });
+  }
+};
