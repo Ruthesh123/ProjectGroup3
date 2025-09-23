@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -10,8 +10,19 @@ export const LoginForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const { login } = useAuth();
+  const { login, user } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    // Redirect if already logged in
+    if (user) {
+      const redirectPath =
+        user.role === 'admin' ? '/admin/dashboard' :
+        user.role === 'employer' ? '/employer/dashboard' :
+        '/student/dashboard';
+      navigate(redirectPath, { replace: true });
+    }
+  }, [user, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,9 +31,17 @@ export const LoginForm: React.FC = () => {
 
     try {
       await login(email, password);
-      navigate('/dashboard');
-    } catch (err) {
-      setError('Invalid email or password');
+      // Navigation will be handled after auth state updates
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found') {
+        setError('No user found with this email');
+      } else if (err.code === 'auth/wrong-password') {
+        setError('Incorrect password');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Invalid email format');
+      } else {
+        setError('Invalid email or password');
+      }
     } finally {
       setLoading(false);
     }

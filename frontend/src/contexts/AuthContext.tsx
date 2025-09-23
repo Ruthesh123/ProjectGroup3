@@ -1,4 +1,14 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  onAuthStateChanged,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../config/firebase';
 import { User, UserRole } from '../types';
 
 interface AuthContextType {
@@ -25,24 +35,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check for existing session
-    checkAuthState();
-  }, []);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
+      if (firebaseUser) {
+        // Fetch user data from Firestore
+        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setUser({
+            id: firebaseUser.uid,
+            email: firebaseUser.email!,
+            role: userData.role as UserRole,
+            emailVerified: firebaseUser.emailVerified,
+            createdAt: userData.createdAt?.toDate() || new Date(),
+            updatedAt: userData.updatedAt?.toDate() || new Date(),
+          });
+        }
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    });
 
-  const checkAuthState = async () => {
-    try {
-      // TODO: Implement Firebase auth state check
-      setLoading(false);
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      setLoading(false);
-    }
-  };
+    return unsubscribe;
+  }, []);
 
   const login = async (email: string, password: string) => {
     try {
-      // TODO: Implement Firebase login
-      console.log('Login:', email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
+
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        setUser({
+          id: userCredential.user.uid,
+          email: userCredential.user.email!,
+          role: userData.role as UserRole,
+          emailVerified: userCredential.user.emailVerified,
+          createdAt: userData.createdAt?.toDate() || new Date(),
+          updatedAt: userData.updatedAt?.toDate() || new Date(),
+        });
+      }
     } catch (error) {
       console.error('Login failed:', error);
       throw error;
@@ -51,8 +83,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const register = async (email: string, password: string, role: UserRole) => {
     try {
-      // TODO: Implement Firebase registration
-      console.log('Register:', email, password, role);
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+
+      // Create user document in Firestore
+      const userData = {
+        email: email,
+        role: role,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await setDoc(doc(db, 'users', userCredential.user.uid), userData);
+
+      setUser({
+        id: userCredential.user.uid,
+        email: userCredential.user.email!,
+        role: role,
+        emailVerified: userCredential.user.emailVerified,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
     } catch (error) {
       console.error('Registration failed:', error);
       throw error;
@@ -61,7 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
-      // TODO: Implement Firebase logout
+      await signOut(auth);
       setUser(null);
     } catch (error) {
       console.error('Logout failed:', error);
@@ -71,8 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const resetPassword = async (email: string) => {
     try {
-      // TODO: Implement password reset
-      console.log('Password reset for:', email);
+      await sendPasswordResetEmail(auth, email);
     } catch (error) {
       console.error('Password reset failed:', error);
       throw error;
