@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import {
   User,
   signInWithEmailAndPassword,
@@ -56,7 +56,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Listen for auth state changes
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user: User | null) => {
       if (user) {
         try {
           // Fetch user profile from Firestore
@@ -262,7 +262,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearError
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return React.createElement(AuthContext.Provider, { value }, children);
 };
 
 // Custom hook to use auth context
