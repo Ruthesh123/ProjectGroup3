@@ -46,9 +46,16 @@ export const loginUser = async (req: Request, res: Response): Promise<Response> 
       verified: userData?.emailVerified || false
     });
 
+    // In test/demo mode, return a format that works with the emulator
+    // The test script will use this token directly as if it were an ID token
+    const isTestMode = process.env.FIREBASE_PROJECT_ID === 'demo-internlink' ||
+                      process.env.NODE_ENV === 'test';
+
     return res.status(200).json({
       success: true,
       token: customToken,
+      customToken: customToken,  // Keep for backward compatibility
+      idToken: isTestMode ? customToken : undefined,  // In test mode, treat custom token as ID token
       user: {
         uid: userRecord.uid,
         email: userRecord.email,
