@@ -4,7 +4,7 @@ import * as admin from 'firebase-admin';
  * Creates an admin user for testing
  * Run this script using: npx ts-node createAdmin.ts
  */
-export async function createAdminUser() {
+export async function createAdminUser(): Promise<any> {
   try {
     // Initialize admin if not already initialized
     if (!admin.apps.length) {
