@@ -26,6 +26,9 @@ sleep 15
 echo "Running API tests..."
 node test-api.js
 
+
+sleep 300
+sleep 300
 # Kill emulators
 kill $EMU_PID 2>/dev/null
 pkill -f firebase 2>/dev/null

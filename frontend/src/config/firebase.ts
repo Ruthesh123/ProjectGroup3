@@ -4,7 +4,7 @@ import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBJK0TNs_KEY",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBJK0TN",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "interlink-dev.firebaseapp.com",
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "interlink-dev",
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "interlink-dev.appspot.com",

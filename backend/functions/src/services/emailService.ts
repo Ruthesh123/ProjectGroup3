@@ -1,5 +1,7 @@
 import * as nodemailer from 'nodemailer';
 import * as admin from 'firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
+import { config } from '../config/environment';
 
 const db = admin.firestore();
 
@@ -22,81 +24,83 @@ interface EmailOptions {
 
 class EmailService {
   private transporter: nodemailer.Transporter | null = null;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor() {
-    this.initializeTransporter();
+    // Initialize immediately
+    this.initializationPromise = this.initializeTransporter();
   }
 
-  private async initializeTransporter() {
+  private async initializeTransporter(): Promise<void> {
     try {
-      const configDoc = await db.collection('config').doc('email').get();
-      
-      if (configDoc.exists) {
-        const config = configDoc.data() as EmailConfig;
-        
-        this.transporter = nodemailer.createTransport({
-          host: config.host || 'smtp.gmail.com',
-          port: config.port || 587,
-          secure: config.secure || false,
-          auth: {
-            user: config.auth.user || process.env.EMAIL_USER || '',
-            pass: config.auth.pass || process.env.EMAIL_PASS || ''
-          }
-        });
-      } else {
-        this.transporter = nodemailer.createTransport({
-          host: 'smtp.gmail.com',
-          port: 587,
-          secure: false,
-          auth: {
-            user: process.env.EMAIL_USER || 'noreply@interlink.com',
-            pass: process.env.EMAIL_PASS || 'your-app-password'
-          }
-        });
-      }
+      // Use configuration from environment.ts
+      this.transporter = nodemailer.createTransport({
+        host: config.email.host,
+        port: config.email.port,
+        secure: config.email.secure,
+        auth: {
+          user: config.email.auth.user,
+          pass: config.email.auth.pass
+        }
+      });
+
+      // Verify connection configuration
+      await this.transporter.verify();
+
+      console.log(`✅ Email transporter initialized and verified with ${config.email.host}`);
+      console.log(`✅ Using Mailtrap credentials: ${config.email.auth.user}`);
     } catch (error) {
-      console.error('Failed to initialize email transporter:', error);
+      console.error('❌ Failed to initialize email transporter:', error);
+      throw error;
     }
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
-    if (!this.transporter) {
-      await this.initializeTransporter();
+    // Ensure transporter is initialized
+    if (this.initializationPromise) {
+      await this.initializationPromise;
     }
 
     if (!this.transporter) {
-      console.error('Email transporter not initialized');
+      console.error('❌ Email transporter not initialized');
       return false;
     }
 
     try {
       const mailOptions = {
-        from: process.env.EMAIL_FROM || 'InternLink <noreply@interlink.com>',
+        from: config.email.from,
         to: options.to,
         subject: options.subject,
         text: options.text || '',
         html: options.html
       };
 
-      await this.transporter.sendMail(mailOptions);
+      console.log(`📧 Sending email to: ${options.to}, Subject: ${options.subject}`);
+
+      const info = await this.transporter.sendMail(mailOptions);
+
+      console.log(`✅ Email sent successfully! Message ID: ${info.messageId}`);
+      console.log(`✅ Preview URL: ${nodemailer.getTestMessageUrl(info) || 'N/A'}`);
 
       await db.collection('emailLogs').add({
         to: options.to,
         subject: options.subject,
         status: 'sent',
-        sentAt: admin.firestore.FieldValue.serverTimestamp()
+        messageId: info.messageId,
+        sentAt: FieldValue.serverTimestamp()
       });
 
       return true;
     } catch (error) {
-      console.error('Failed to send email:', error);
-      
+      console.error('❌ Failed to send email:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+
       await db.collection('emailLogs').add({
         to: options.to,
         subject: options.subject,
         status: 'failed',
         error: error instanceof Error ? error.message : 'Unknown error',
-        failedAt: admin.firestore.FieldValue.serverTimestamp()
+        failedAt: FieldValue.serverTimestamp()
       });
 
       return false;
@@ -150,7 +154,7 @@ class EmailService {
             <p>Best of luck!</p>
           </div>
           <div class="footer">
-            <p>&copy; 2024 InternLink. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} InternLink. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -198,7 +202,7 @@ class EmailService {
             <p>Please check your dashboard for more details.</p>
           </div>
           <div class="footer">
-            <p>&copy; 2024 InternLink. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} InternLink. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -233,10 +237,10 @@ class EmailService {
             <p>You have received a new application for the position of <strong>${jobTitle}</strong>.</p>
             <p>Applicant: <strong>${studentName}</strong></p>
             <p>Please log in to your dashboard to review the application.</p>
-            <p><a href="${process.env.APP_URL}/employer/applications" class="button">View Application</a></p>
+            <p><a href="${config.frontend.url}/employer/applications" class="button">View Application</a></p>
           </div>
           <div class="footer">
-            <p>&copy; 2024 InternLink. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} InternLink. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -253,7 +257,7 @@ class EmailService {
         <h3>${job.title}</h3>
         <p><strong>${job.companyName}</strong> - ${job.location}</p>
         <p>${job.description.substring(0, 150)}...</p>
-        <a href="${process.env.APP_URL}/jobs/${job.id}" style="color: #4A90E2;">View Job</a>
+        <a href="${config.frontend.url}/jobs/${job.id}" style="color: #4A90E2;">View Job</a>
       </div>
     `).join('');
 
@@ -280,7 +284,7 @@ class EmailService {
           </div>
           <div class="footer">
             <p>To unsubscribe from these alerts, update your preferences in your dashboard.</p>
-            <p>&copy; 2024 InternLink. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} InternLink. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -320,7 +324,7 @@ class EmailService {
             <p>If you did not request this reset, please ignore this email.</p>
           </div>
           <div class="footer">
-            <p>&copy; 2024 InternLink. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} InternLink. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -379,7 +383,7 @@ class EmailService {
             ` : ''}
           </div>
           <div class="footer">
-            <p>&copy; 2024 InternLink. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} InternLink. All rights reserved.</p>
           </div>
         </div>
       </body>

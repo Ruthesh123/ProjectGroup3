@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { auth } from '../config/firebase';
+import { emailService } from '../services/emailService';
 
 interface ResetPasswordRequest {
   email: string;
@@ -18,8 +19,19 @@ export const resetPassword = async (req: Request, res: Response): Promise<Respon
     // Generate password reset link
     const link = await auth.generatePasswordResetLink(email);
 
-    // TODO: Send email with reset link
-    console.log('Password reset link:', link);
+    // Send email with reset link using the email service
+    console.log('Password reset link generated:', link);
+
+    const emailSent = await emailService.sendPasswordResetEmail(email, link);
+
+    if (!emailSent) {
+      console.error('Failed to send password reset email to:', email);
+      return res.status(500).json({
+        error: 'Failed to send password reset email. Please try again.'
+      });
+    }
+
+    console.log('Password reset email sent successfully to:', email);
 
     return res.status(200).json({
       success: true,

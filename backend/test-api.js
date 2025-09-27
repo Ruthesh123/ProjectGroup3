@@ -277,10 +277,10 @@ async function testAuthEndpoints() {
     }
   }
 
-  // Test password reset
+  // Test password reset (triggers email via Mailtrap)
   await testEndpoint('POST', '/auth/reset-password', {
     email: studentData.email
-  }, null, 'Password Reset');
+  }, null, 'Password Reset (Email sent to Mailtrap)');
 
   // Invalid login test
   await testEndpoint('POST', '/auth/login', {
@@ -345,10 +345,10 @@ async function testApplicationEndpoints() {
     return;
   }
 
-  // Submit applications (as student)
+  // Submit applications (as student) - triggers confirmation emails
   for (let i = 0; i < Math.min(2, testData.jobs.length); i++) {
     const applicationData = generateMockApplication(testData.jobs[i]);
-    const submitApp = await testEndpoint('POST', '/applications/submit', applicationData, testData.tokens.student, `Submit Application ${i + 1}`);
+    const submitApp = await testEndpoint('POST', '/applications/submit', applicationData, testData.tokens.student, `Submit Application ${i + 1} (Confirmation email sent)`);
     if (submitApp.success && submitApp.data && submitApp.data.applicationId) {
       testData.applications.push(submitApp.data.applicationId);
     }
@@ -403,6 +403,11 @@ async function runTests() {
   console.log(`${colors.blue}║     Complete Endpoint Testing           ║${colors.reset}`);
   console.log(`${colors.blue}╚══════════════════════════════════════════╝${colors.reset}`);
 
+  console.log(`\n📧 Email Configuration:`);
+  console.log(`   Service: Mailtrap (sandbox.smtp.mailtrap.io)`);
+  console.log(`   Check emails at: https://mailtrap.io/inboxes`);
+  console.log(`   Credentials: e7d1fdd721ce6a`);
+
   // Test 1: Health Check
   console.log(`\n${colors.cyan}1. Testing Health Check${colors.reset}`);
   const health = await testEndpoint('GET', '/health', null, null, 'Health Check');
@@ -433,6 +438,14 @@ async function runTests() {
   } else {
     console.log(`${colors.yellow}⚠️  Some tests failed. Check the logs above for details.${colors.reset}`);
   }
+
+  console.log(`\n📬 Email Testing:`);
+  console.log(`   Check Mailtrap inbox for test emails:`);
+  console.log(`   - Password reset emails`);
+  console.log(`   - Application confirmation emails`);
+  console.log(`   Visit: https://mailtrap.io/inboxes`);
+  console.log(`   Login: Use your Mailtrap credentials`);
+  console.log(`   Inbox: e7d1fdd721ce6a`);
 }
 
 // Check if fetch is available
