@@ -16,11 +16,30 @@ service cloud.firestore {
 
     // Applications collection
     match /applications/{applicationId} {
-      allow read: if request.auth != null &&
-        (request.auth.uid == resource.data.studentId ||
-         request.auth.uid == resource.data.employerId);
-      allow create: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student';
+      // Read if:
+      //  - student is the owner, OR
+      //  - employerId is stored on the application and matches, OR
+      //  - the employer who owns the related job (derived from the job doc)
+      allow read: if request.auth != null && (
+        resource.data.studentId == request.auth.uid ||
+        (resource.data.employerId is string && resource.data.employerId == request.auth.uid) ||
+        (
+          (resource.data.jobId is string)
+          && exists(/databases/$(database)/documents/jobs/$(resource.data.jobId))
+          && get(/databases/$(database)/documents/jobs/$(resource.data.jobId)).data.employerId == request.auth.uid
+        )
+      );
+
+      // Create if:
+      //  - authed user exists and has role 'student'
+      //  - they are creating for themselves
+      //  - jobId is a string and the job exists
+      allow create: if request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+        && request.resource.data.studentId == request.auth.uid
+        && (request.resource.data.jobId is string)
+        && exists(/databases/$(database)/documents/jobs/$(request.resource.data.jobId));
     }
   }
 }

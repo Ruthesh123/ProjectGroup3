@@ -19,6 +19,7 @@ import { EmployerProfile } from './pages/employer/EmployerProfile';
 import { EmployerJobs } from './pages/employer/EmployerJobs';
 import { EmployerApplicants } from './pages/employer/EmployerApplicants';
 import { EmployerAnalytics } from './pages/employer/EmployerAnalytics';
+import { ApplyJob } from './pages/ApplyJob';
 import './App.css';
 
 function App() {
@@ -99,6 +100,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/apply/:jobId" element={<ApplyJob />} />
 
           {/* Employer Routes */}
           <Route

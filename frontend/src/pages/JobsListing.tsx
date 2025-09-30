@@ -6,6 +6,7 @@ import { JobCard } from '../components/student/JobCard';
 import { ProfileDropdown } from '../components/shared/ProfileDropdown';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { SiteHeader } from '../components/shared/SiteHeader';
 
 export const JobsListing: React.FC = () => {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -150,50 +151,7 @@ export const JobsListing: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <button onClick={() => navigate('/')} className="flex items-center">
-                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-                  <span className="text-white font-bold text-xl">IL</span>
-                </div>
-                <h1 className="ml-3 text-xl font-bold text-gray-900">InternLink</h1>
-              </button>
-            </div>
-
-            <nav className="hidden md:flex space-x-8">
-              <a href="/jobs" className="text-primary font-medium">Browse Jobs</a>
-              {user && user.role === 'student' && (
-                <>
-                  <a href="/student/applications" className="text-gray-700 hover:text-primary">My Applications</a>
-                  <a href="/student/saved" className="text-gray-700 hover:text-primary">Saved Jobs</a>
-                </>
-              )}
-              {user && user.role === 'employer' && (
-                <>
-                  <a href="/employer/dashboard" className="text-gray-700 hover:text-primary">Dashboard</a>
-                  <a href="/employer/post-job" className="text-gray-700 hover:text-primary">Post a Job</a>
-                </>
-              )}
-            </nav>
-
-            <div className="flex items-center space-x-4">
-              {user ? (
-                <ProfileDropdown />
-              ) : (
-                <button
-                  onClick={() => navigate('/login')}
-                  className="px-4 py-2 bg-primary text-white rounded-md hover:bg-blue-700"
-                >
-                  Login
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
 
       {/* Hero Section */}
       <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white py-16">

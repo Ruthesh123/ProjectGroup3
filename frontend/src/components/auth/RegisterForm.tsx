@@ -32,7 +32,7 @@ export const RegisterForm: React.FC = () => {
 
     try {
       await register(email, password, role);
-      navigate('/profile-setup');
+      navigate('/login');
     } catch (err) {
       setError('Registration failed. Please try again.');
     } finally {

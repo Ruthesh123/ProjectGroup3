@@ -1,7 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { JobCard } from '../../components/student/JobCard';
 import { ProfileDropdown } from '../../components/shared/ProfileDropdown';
 import { Job } from '../../types';
+import {
+  collection,
+  getDocs,
+  orderBy,
+  query,
+} from 'firebase/firestore';
+import { db } from '../../config/firebase';
 
 export const StudentDashboard: React.FC = () => {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -13,71 +20,104 @@ export const StudentDashboard: React.FC = () => {
     type: '',
     skills: [] as string[],
   });
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // TODO: Fetch jobs from API
     fetchJobs();
-  }, [filters, searchTerm]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Load jobs from Firestore (tries createdAt ordering first, then falls back)
   const fetchJobs = async () => {
     setLoading(true);
+    setError(null);
     try {
-      // Mock data for now
-      const mockJobs: Job[] = [
-        {
-          id: '1',
-          employerId: 'emp1',
-          companyName: 'TechCorp Inc.',
-          title: 'Frontend Developer Intern',
-          description: 'Join our dynamic team to build cutting-edge web applications using React and TypeScript.',
-          location: 'Toronto, ON',
-          type: 'internship',
-          skills: ['React', 'TypeScript', 'Tailwind CSS', 'Git'],
-          salary: { min: 25, max: 30, currency: 'CAD/hr' },
-          status: 'active',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          viewCount: 245,
-          applicationCount: 12,
-        },
-        {
-          id: '2',
-          employerId: 'emp2',
-          companyName: 'DataSoft Solutions',
-          title: 'Backend Developer Co-op',
-          description: 'Work on scalable backend systems using Node.js and cloud technologies.',
-          location: 'Remote',
-          type: 'full-time',
-          skills: ['Node.js', 'AWS', 'MongoDB', 'Docker'],
-          salary: { min: 30, max: 40, currency: 'CAD/hr' },
-          status: 'active',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          viewCount: 189,
-          applicationCount: 8,
-        },
-      ];
-      setJobs(mockJobs);
-    } catch (error) {
-      console.error('Failed to fetch jobs:', error);
+      let snap;
+      try {
+        const q1 = query(collection(db, 'jobs'), orderBy('createdAt', 'desc'));
+        snap = await getDocs(q1);
+      } catch {
+        // If createdAt isn’t present on some docs, just fetch without order
+        const { getDocs: getDocsOnly, collection: collOnly } = await import('firebase/firestore');
+        snap = await getDocsOnly(collOnly(db, 'jobs'));
+      }
+
+      const rows: Job[] = snap.docs.map((d) => {
+        const data: any = d.data();
+        return {
+          id: d.id,
+          employerId: data.employerId || '',
+          companyName: data.companyName || 'Unknown Company',
+          title: data.title || 'Untitled Position',
+          description: data.description || '',
+          location: data.location || 'Not specified',
+          type: data.type || 'full-time',
+          skills: Array.isArray(data.skills) ? data.skills : [],
+          salary: data.salary ?? null,
+          status: data.status || 'active',
+          createdAt: data.createdAt?.toDate?.() || new Date(0),
+          updatedAt: data.updatedAt?.toDate?.() || new Date(0),
+          viewCount: data.viewCount || 0,
+          applicationCount: data.applicationCount || 0,
+        } as Job;
+      });
+
+      // If we didn’t order at the query level, sort by createdAt client-side
+      const sorted = [...rows].sort(
+        (a, b) => (b.createdAt?.getTime?.() || 0) - (a.createdAt?.getTime?.() || 0)
+      );
+
+      setJobs(sorted);
+    } catch (e: any) {
+      console.error('Failed to fetch jobs:', e);
+      setError(e?.message || 'Failed to fetch jobs.');
+      setJobs([]);
     } finally {
       setLoading(false);
     }
   };
 
+  // Derived list after search + filters (all client-side for now)
+  const visibleJobs = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+
+    return jobs.filter((job) => {
+      // search
+      const matchesSearch =
+        !term ||
+        job.title.toLowerCase().includes(term) ||
+        job.companyName.toLowerCase().includes(term) ||
+        (job.skills || []).some((s) => s.toLowerCase().includes(term));
+
+      // filters
+      const matchesType = !filters.type || job.type === filters.type;
+      const matchesLocation =
+        !filters.location ||
+        (job.location || '').toLowerCase().includes(filters.location.toLowerCase());
+
+      const matchesSkills =
+        !filters.skills?.length ||
+        filters.skills.every((s) =>
+          (job.skills || []).map((x) => x.toLowerCase()).includes(s.toLowerCase())
+        );
+
+      return matchesSearch && matchesType && matchesLocation && matchesSkills;
+    });
+  }, [jobs, searchTerm, filters]);
+
   const handleApply = (jobId: string) => {
+    // TODO: navigate(`/apply/${jobId}`) if you have that route
     console.log('Applying to job:', jobId);
-    // TODO: Navigate to application page
   };
 
   const handleSave = (jobId: string) => {
+    // TODO: implement save
     console.log('Saving job:', jobId);
-    // TODO: Save job to user's saved list
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+      {/* Header (kept as-is) */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -86,9 +126,9 @@ export const StudentDashboard: React.FC = () => {
             </div>
             <nav className="hidden md:flex space-x-8">
               <a href="/jobs" className="text-gray-700 hover:text-primary">Browse Jobs</a>
-              <a href="/applications" className="text-gray-700 hover:text-primary">My Applications</a>
+              <a href="/student/applications" className="text-gray-700 hover:text-primary">My Applications</a>
               <a href="/profile" className="text-gray-700 hover:text-primary">Profile</a>
-              <a href="/saved" className="text-gray-700 hover:text-primary">Saved Jobs</a>
+              <a href="/student/saved" className="text-gray-700 hover:text-primary">Saved Jobs</a>
             </nav>
             <div className="flex items-center space-x-4">
               <button className="relative p-2 text-gray-600 hover:text-primary">
@@ -103,7 +143,7 @@ export const StudentDashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* Search Bar */}
+      {/* Search / quick controls */}
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex flex-col md:flex-row gap-4">
@@ -126,12 +166,29 @@ export const StudentDashboard: React.FC = () => {
                 </svg>
               </div>
             </div>
-            <button className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center">
-              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-              </svg>
-              Filters
-            </button>
+
+            {/* Type filter */}
+            <select
+              value={filters.type}
+              onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary"
+            >
+              <option value="">All Types</option>
+              <option value="internship">Internship</option>
+              <option value="full-time">Full Time</option>
+              <option value="part-time">Part Time</option>
+              <option value="contract">Contract</option>
+            </select>
+
+            {/* Location filter (contains) */}
+            <input
+              value={filters.location}
+              onChange={(e) => setFilters((f) => ({ ...f, location: e.target.value }))}
+              placeholder="Filter by location"
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary"
+            />
+
+            {/* View toggle */}
             <div className="flex border border-gray-300 rounded-lg">
               <button
                 onClick={() => setViewMode('grid')}
@@ -154,12 +211,18 @@ export const StudentDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* Main */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Available Opportunities</h2>
-          <p className="text-gray-600">{jobs.length} jobs found</p>
+          <p className="text-gray-600">{visibleJobs.length} jobs found</p>
         </div>
+
+        {error && (
+          <div className="mb-6 p-4 rounded-lg border border-red-200 bg-red-50 text-red-700">
+            {error}
+          </div>
+        )}
 
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -176,13 +239,8 @@ export const StudentDashboard: React.FC = () => {
           </div>
         ) : (
           <div className={viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6' : 'space-y-4'}>
-            {jobs.map((job) => (
-              <JobCard
-                key={job.id}
-                job={job}
-                onApply={handleApply}
-                onSave={handleSave}
-              />
+            {visibleJobs.map((job) => (
+              <JobCard key={job.id} job={job} onApply={handleApply} onSave={handleSave} />
             ))}
           </div>
         )}
