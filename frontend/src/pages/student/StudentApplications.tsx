@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { getAuth, onAuthStateChanged, User as FbUser } from 'firebase/auth';
 import { db } from '../../config/firebase';
+import { SiteHeader } from '../../components/shared/SiteHeader';
 import { Eye, Download, Clock, CheckCircle, XCircle, AlertCircle, Filter, Search } from 'lucide-react';
 
 type AppStatus = 'pending' | 'reviewing' | 'accepted' | 'rejected' | 'withdrawn' | string;
@@ -268,11 +269,13 @@ export const StudentApplications = () => {
       </div>
     );
   }
-
+  
   return (
     <div className="min-h-screen bg-gray-50 py-8">
+      <SiteHeader />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
+        
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">My Applications</h1>
           <p className="text-gray-600 mt-2">Track and manage your job applications</p>
