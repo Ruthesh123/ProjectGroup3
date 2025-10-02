@@ -270,10 +270,15 @@ export const JobsListing: React.FC = () => {
               <JobCard
                 key={job.id}
                 job={job}
+                isSaved={Boolean(isSaved?.(job.id))}
                 onApply={handleApply}
                 onSave={() => {
                   if (!uid) return navigate('/login');
-                  toggle(uid, job);
+                  try {
+                    toggle(uid, job);
+                  } catch (e) {
+                    console.error('Failed to toggle job', e);
+                  } 
               }}
               />
             ))}

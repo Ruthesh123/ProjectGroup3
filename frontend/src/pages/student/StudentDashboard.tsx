@@ -254,10 +254,16 @@ export const StudentDashboard: React.FC = () => {
               <JobCard
                 key={job.id}
                 job={job}
-                onApply={() => handleApply(job.id)}
-                onSave={() => handleSave(job.id)}
-                // If your JobCard supports showing a saved state, you can pass:
-                // saved={uid ? isSaved(job.id) : false}
+                isSaved={Boolean(isSaved?.(job.id))}
+                onApply={handleApply}
+                onSave={() => {
+                  if (!uid) return navigate('/login');
+                  try {
+                    toggle(uid, job);
+                  } catch (e) {
+                    console.error('Failed to toggle job', e);
+                  } 
+                }}
               />
             ))}
           </div>
