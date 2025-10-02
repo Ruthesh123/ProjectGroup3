@@ -16,6 +16,7 @@ import {
 import { db } from '../../config/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { SiteHeader } from '../../components/shared/SiteHeader';
 import {
   Bookmark,
   BookmarkX,
@@ -191,44 +192,24 @@ export const StudentSavedJobs = () => {
 
   // Create application with your 8 fields + prevent duplicates  ✅
   const applyToJob = async (job: SavedJob) => {
-    if (!user) return;
+    if (!user) return navigate('/login');
 
-    try {
-      // prevent double apply
-      const existsQ = query(
-        collection(db, 'applications'),
-        where('studentId', '==', user.id),
-        where('jobId', '==', job.jobId)
-      );
-      const existsSnap = await getDocs(existsQ);
-      if (!existsSnap.empty) {
-        alert('You have already applied to this job.');
-        return;
-      }
+  // Prevent duplicate applications: if already applied, send them to Applications
+  const existsQ = query(
+    collection(db, 'applications'),
+    where('studentId', '==', user.id),
+    where('jobId', '==', job.jobId)
+  );
+  const existsSnap = await getDocs(existsQ);
+  if (!existsSnap.empty) {
+    alert('You have already applied to this job.');
+    navigate('/student/applications');
+    return;
+  }
 
-      await addDoc(collection(db, 'applications'), {
-        companyName: job.companyName,         // 1
-        coverLetter: '',                      // 2 (fill from profile or a form)
-        employerId: job.employerId || '',     // 3
-        jobId: job.jobId,                     // 4
-        jobTitle: job.title,                  // 5
-        resume: '',                           // 6 (URL to resume)
-        status: 'pending',                    // 7
-        studentId: user.id,                   // 8
-        appliedDate: Timestamp.now(),         // extra (ok to have more fields)
-        lastUpdated: Timestamp.now(),
-      });
-
-      setSavedJobs((prev) =>
-        prev.map((j) => (j.id === job.id ? { ...j, hasApplied: true } : j))
-      );
-
-      alert('Application submitted successfully!');
-    } catch (error) {
-      console.error('Error applying to job:', error);
-      alert('Failed to submit application. Please try again.');
-    }
-  };
+  // Go to the Apply page
+  navigate(`/apply/${job.jobId}`);
+};
 
   const getDaysUntilDeadline = (deadline: Date) => {
     const now = new Date();
@@ -246,6 +227,7 @@ export const StudentSavedJobs = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
+      <SiteHeader/>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">

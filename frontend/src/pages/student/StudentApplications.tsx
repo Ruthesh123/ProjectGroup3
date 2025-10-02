@@ -4,38 +4,47 @@ import {
   query,
   where,
   getDocs,
-  doc as docRef,
-  getDoc,
   doc,
+  getDoc,
   updateDoc,
   Timestamp,
 } from 'firebase/firestore';
 import { getAuth, onAuthStateChanged, User as FbUser } from 'firebase/auth';
 import { db } from '../../config/firebase';
 import { SiteHeader } from '../../components/shared/SiteHeader';
-import { Eye, Download, Clock, CheckCircle, XCircle, AlertCircle, Filter, Search } from 'lucide-react';
+import {
+  Eye,
+  Download,
+  Clock,
+  CheckCircle,
+  XCircle,
+  AlertCircle,
+  Filter,
+  Search,
+} from 'lucide-react';
 
 type AppStatus = 'pending' | 'reviewing' | 'accepted' | 'rejected' | 'withdrawn' | string;
 
 interface Application {
   id: string;
-  // from applications collection (your 8 fields)
+
+  // Base application fields (supporting multiple possible key names)
   companyName: string;
   coverLetter?: string | null;
   employerId?: string | null;
   jobId: string;
   jobTitle: string;
-  resumeUrl?: string | null;
+  resumeUrl?: string | null; // supports 'resume' or 'resumeUrl'
   status: AppStatus;
   studentId: string;
 
-  // optional enrichments (from jobs/{jobId}, if that doc exists)
+  // Optional enrichments (from jobs/{jobId})
   location?: string;
   jobType?: string;
   salary?: string;
   companyLogo?: string;
 
-  // optional timestamps if you later add them
+  // Optional timestamps
   appliedDate?: Date;
   lastUpdated?: Date;
   notes?: string;
@@ -52,7 +61,32 @@ export const StudentApplications = () => {
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
   const [showModal, setShowModal] = useState(false);
 
-  // get a real Firebase UID (so no TS errors about user.uid)
+  // Resolve a Firebase Timestamp or ISO/date-like into a Date
+  const safeToDate = (v: any): Date | undefined => {
+    if (!v) return undefined;
+    if (typeof v?.toDate === 'function') return v.toDate();
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? undefined : d;
+  };
+  
+  const formatSalary = (raw: any): string | undefined => {
+    if (!raw) return undefined;
+  // common shapes: {min,max,currency} | number | string
+    if (typeof raw === 'object' && (raw.min !== undefined || raw.max !== undefined)) {
+      const cur = raw.currency ?? '';
+      const min = raw.min ?? '';
+      const max = raw.max ?? '';
+      if (min !== '' && max !== '') return `${cur ? cur + ' ' : ''}${min}–${max}`;
+      if (min !== '') return `${cur ? cur + ' ' : ''}${min}`;
+      if (max !== '') return `${cur ? cur + ' ' : ''}${max}`;
+      return undefined;
+    }
+  if (typeof raw === 'number') return String(raw);
+  return String(raw); // already a string
+};
+
+
+  // Capture a *real* Firebase uid
   useEffect(() => {
     const unsub = onAuthStateChanged(getAuth(), (u: FbUser | null) => {
       setUid(u?.uid ?? null);
@@ -68,29 +102,20 @@ export const StudentApplications = () => {
     filterApplications();
   }, [applications, selectedStatus, searchTerm]);
 
-  const safeToDate = (v: any): Date | undefined => {
-    // tolerate missing/invalid dates
-    if (!v) return undefined;
-    if (typeof v?.toDate === 'function') return v.toDate();
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? undefined : d;
-  };
-
   const fetchApplications = async (currUid: string) => {
     try {
       setLoading(true);
+
       const applicationsQuery = query(
         collection(db, 'applications'),
         where('studentId', '==', currUid)
       );
-
       const snapshot = await getDocs(applicationsQuery);
 
-      const rows = await Promise.all(
+      const rows: Application[] = await Promise.all(
         snapshot.docs.map(async (d) => {
           const data = d.data() as any;
 
-          // your 8 fields (supporting a few common naming typos/variants just in case)
           const companyName =
             data.companyName ??
             data['company name'] ??
@@ -98,63 +123,65 @@ export const StudentApplications = () => {
             data['compnay name'] ??
             'Unknown Company';
 
-          const coverLetter = data.coverLetter ?? data['cover letter'] ?? null;
-          const employerId = data.employerId ?? data['employer id'] ?? null;
-          const jobId = data.jobId ?? data['jobid'] ?? '';
           const jobTitle = data.jobTitle ?? data['jobtitle'] ?? 'Unknown Position';
-          const resumeUrl = data.resume ?? data.resumeUrl ?? null;
-          const status: AppStatus = data.status ?? 'pending';
-          const studentId = data.studentId ?? '';
+          const jobId = data.jobId ?? data['jobid'] ?? '';
 
-          // optional enrich from jobs/{jobId} if exists (location/type/salary/logo)
+          // Support both 'resumeUrl' and 'resume'
+          const resumeUrl = data.resumeUrl ?? data.resume ?? null;
+
+          const status: AppStatus = data.status ?? 'pending';
+          const studentId: string = data.studentId ?? '';
+          const coverLetter: string | null = data.coverLetter ?? data['cover letter'] ?? null;
+          const employerId: string | null = data.employerId ?? data['employer id'] ?? null;
+
+          // Support both 'appliedDate' and 'appliedAt'
+          const appliedDate = safeToDate(data.appliedDate ?? data.appliedAt);
+          const lastUpdated = safeToDate(data.lastUpdated);
+
+          // Optional job enrichment from jobs/{jobId}
           let jobExtra: Partial<Application> = {};
           if (jobId) {
             try {
-              const jobDoc = await getDoc(docRef(db, 'jobs', jobId));
+              const jobDoc = await getDoc(doc(db, 'jobs', jobId));
               if (jobDoc.exists()) {
                 const j = jobDoc.data() as any;
                 jobExtra = {
                   location: j?.location,
                   jobType: j?.type,
-                  salary: j?.salary,
+                  salary: formatSalary(j?.salary),
                   companyLogo: j?.companyLogo,
                 };
               }
             } catch {
-              // best-effort only
+              // best effort only
             }
           }
 
-          const appliedDate = safeToDate(data.appliedDate);
-          const lastUpdated = safeToDate(data.lastUpdated);
-
-          const app: Application = {
+          return {
             id: d.id,
-            companyName,
-            coverLetter,
-            employerId,
+            companyName: String(companyName || 'Unknown Company'),
+            jobTitle: String(jobTitle || 'Unknown Position'),
             jobId,
-            jobTitle,
             resumeUrl,
             status,
             studentId,
+            coverLetter,
+            employerId,
             ...jobExtra,
             appliedDate,
             lastUpdated,
             notes: data.notes,
-          };
-
-          return app;
+          } as Application;
         })
       );
 
-      // No appliedDate in your schema -> keep stable order by doc id
+      // If no appliedDate present, keep a stable order by id
       rows.sort((a, b) => a.id.localeCompare(b.id));
 
       setApplications(rows);
     } catch (err) {
       console.error('Error fetching applications:', err);
-      setApplications([]); // no mock fallback to avoid confusion
+      setApplications([]);
     } finally {
       setLoading(false);
     }
@@ -171,12 +198,11 @@ export const StudentApplications = () => {
       const s = searchTerm.toLowerCase();
       filtered = filtered.filter(
         (app) =>
-          app.jobTitle.toLowerCase().includes(s) ||
-          app.companyName.toLowerCase().includes(s)
+          (app.jobTitle || '').toLowerCase().includes(s) ||
+          (app.companyName || '').toLowerCase().includes(s)
       );
     }
 
-    // If you add appliedDate in future, you can sort by it; for now keep as loaded
     setFilteredApplications(filtered);
   };
 
@@ -189,8 +215,8 @@ export const StudentApplications = () => {
         lastUpdated: Timestamp.now(),
       });
       if (uid) fetchApplications(uid);
-    } catch (error) {
-      console.error('Error withdrawing application:', error);
+    } catch (error: any) {
+      console.error('Error withdrawing application:', error?.code, error?.message, error);
       alert('Failed to withdraw application. Please try again.');
     }
   };
@@ -269,13 +295,13 @@ export const StudentApplications = () => {
       </div>
     );
   }
-  
+
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <SiteHeader />
+
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
-        
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">My Applications</h1>
           <p className="text-gray-600 mt-2">Track and manage your job applications</p>
@@ -343,7 +369,7 @@ export const StudentApplications = () => {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
                 <input
                   type="text"
                   placeholder="Search applications..."
@@ -398,19 +424,23 @@ export const StudentApplications = () => {
                       {application.companyLogo ? (
                         <img
                           src={application.companyLogo}
-                          alt={application.companyName}
+                          alt={application.companyName || 'Company'}
                           className="w-16 h-16 rounded-lg object-cover"
                         />
                       ) : (
                         <div className="w-16 h-16 bg-gray-200 rounded-lg flex items-center justify-center">
                           <span className="text-gray-500 text-xl font-bold">
-                            {application.companyName.charAt(0)}
+                            {(application.companyName || 'U')?.[0] || 'U'}
                           </span>
                         </div>
                       )}
+
                       <div className="flex-1">
-                        <h3 className="text-lg font-semibold text-gray-900">{application.jobTitle}</h3>
-                        <p className="text-gray-600">{application.companyName}</p>
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          {application.jobTitle || 'Unknown Position'}
+                        </h3>
+                        <p className="text-gray-600">{application.companyName || 'Unknown Company'}</p>
+
                         <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-gray-500">
                           {application.location && <span>{application.location}</span>}
                           {application.location && application.jobType && <span>•</span>}
@@ -422,6 +452,7 @@ export const StudentApplications = () => {
                             </>
                           )}
                         </div>
+
                         <div className="flex items-center gap-4 mt-3">
                           {getStatusBadge(application.status)}
                           {application.appliedDate && (
@@ -435,14 +466,18 @@ export const StudentApplications = () => {
                             </span>
                           )}
                         </div>
+
                         {application.notes && (
                           <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-                            <p className="text-sm text-blue-800">{application.notes}</p>
+                            <p className="text-sm text-blue-800 whitespace-pre-wrap">
+                              {application.notes}
+                            </p>
                           </div>
                         )}
                       </div>
                     </div>
                   </div>
+
                   <div className="flex items-center gap-2 ml-4">
                     <button
                       onClick={() => {
@@ -454,6 +489,7 @@ export const StudentApplications = () => {
                     >
                       <Eye className="h-5 w-5" />
                     </button>
+
                     {application.resumeUrl && (
                       <a
                         href={application.resumeUrl}
@@ -465,6 +501,7 @@ export const StudentApplications = () => {
                         <Download className="h-5 w-5" />
                       </a>
                     )}
+
                     {application.status === 'pending' && (
                       <button
                         onClick={() => withdrawApplication(application.id)}
@@ -497,8 +534,12 @@ export const StudentApplications = () => {
 
                 <div className="space-y-4">
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900">{selectedApplication.jobTitle}</h3>
-                    <p className="text-gray-600">{selectedApplication.companyName}</p>
+                    <h3 className="text-lg font-semibold text-gray-900">
+                      {selectedApplication.jobTitle || 'Unknown Position'}
+                    </h3>
+                    <p className="text-gray-600">
+                      {selectedApplication.companyName || 'Unknown Company'}
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -506,6 +547,7 @@ export const StudentApplications = () => {
                       <p className="text-sm text-gray-500">Status</p>
                       <div className="mt-1">{getStatusBadge(selectedApplication.status)}</div>
                     </div>
+
                     {selectedApplication.appliedDate && (
                       <div>
                         <p className="text-sm text-gray-500">Applied</p>
@@ -514,24 +556,28 @@ export const StudentApplications = () => {
                         </p>
                       </div>
                     )}
+
                     {selectedApplication.location && (
                       <div>
                         <p className="text-sm text-gray-500">Location</p>
                         <p className="text-gray-900">{selectedApplication.location}</p>
                       </div>
                     )}
+
                     {selectedApplication.jobType && (
                       <div>
                         <p className="text-sm text-gray-500">Job Type</p>
                         <p className="text-gray-900">{selectedApplication.jobType}</p>
                       </div>
                     )}
+
                     {selectedApplication.salary && (
                       <div>
                         <p className="text-sm text-gray-500">Salary</p>
                         <p className="text-gray-900">{selectedApplication.salary}</p>
                       </div>
                     )}
+
                     {selectedApplication.lastUpdated && (
                       <div>
                         <p className="text-sm text-gray-500">Last Updated</p>
@@ -561,6 +607,7 @@ export const StudentApplications = () => {
                   >
                     Close
                   </button>
+
                   {selectedApplication.resumeUrl && (
                     <a
                       href={selectedApplication.resumeUrl}
@@ -581,3 +628,5 @@ export const StudentApplications = () => {
     </div>
   );
 };
+
+export default StudentApplications;
