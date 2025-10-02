@@ -2,6 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { JobCard } from '../../components/student/JobCard';
 import { ProfileDropdown } from '../../components/shared/ProfileDropdown';
 import { Job } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSavedJobs } from '../../hooks/useSavedJobs';
+import { useNavigate } from 'react-router-dom';
+
 import {
   collection,
   getDocs,
@@ -21,6 +25,11 @@ export const StudentDashboard: React.FC = () => {
     skills: [] as string[],
   });
   const [error, setError] = useState<string | null>(null);
+
+  const { user } = useAuth();
+  const uid = user?.id || null;
+  const navigate = useNavigate();
+  const { isSaved, toggle } = useSavedJobs(uid);
 
   useEffect(() => {
     fetchJobs();
@@ -62,7 +71,7 @@ export const StudentDashboard: React.FC = () => {
         } as Job;
       });
 
-      // If we didn’t order at the query level, sort by createdAt client-side
+      // If not ordered at query level, sort by createdAt client-side
       const sorted = [...rows].sort(
         (a, b) => (b.createdAt?.getTime?.() || 0) - (a.createdAt?.getTime?.() || 0)
       );
@@ -82,15 +91,14 @@ export const StudentDashboard: React.FC = () => {
     const term = searchTerm.trim().toLowerCase();
 
     return jobs.filter((job) => {
-      // search
       const matchesSearch =
         !term ||
         job.title.toLowerCase().includes(term) ||
         job.companyName.toLowerCase().includes(term) ||
         (job.skills || []).some((s) => s.toLowerCase().includes(term));
 
-      // filters
       const matchesType = !filters.type || job.type === filters.type;
+
       const matchesLocation =
         !filters.location ||
         (job.location || '').toLowerCase().includes(filters.location.toLowerCase());
@@ -105,19 +113,22 @@ export const StudentDashboard: React.FC = () => {
     });
   }, [jobs, searchTerm, filters]);
 
+  // Handlers (mirror JobsListing)
   const handleApply = (jobId: string) => {
-    // TODO: navigate(`/apply/${jobId}`) if you have that route
-    console.log('Applying to job:', jobId);
+    if (!uid) return navigate('/login');
+    navigate(`/apply/${jobId}`);
   };
 
   const handleSave = (jobId: string) => {
-    // TODO: implement save
-    console.log('Saving job:', jobId);
+    if (!uid) return navigate('/login');
+    const job = jobs.find(j => j.id === jobId);
+    if (!job) return;
+    toggle(uid, job);
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header (kept as-is) */}
+      {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -240,7 +251,14 @@ export const StudentDashboard: React.FC = () => {
         ) : (
           <div className={viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6' : 'space-y-4'}>
             {visibleJobs.map((job) => (
-              <JobCard key={job.id} job={job} onApply={handleApply} onSave={handleSave} />
+              <JobCard
+                key={job.id}
+                job={job}
+                onApply={() => handleApply(job.id)}
+                onSave={() => handleSave(job.id)}
+                // If your JobCard supports showing a saved state, you can pass:
+                // saved={uid ? isSaved(job.id) : false}
+              />
             ))}
           </div>
         )}

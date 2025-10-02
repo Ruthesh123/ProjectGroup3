@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "InternLink backend services",
   "scripts": {
-    "emulators": "firebase emulators:start",
+    "emulators": "firebase emulators:start --import=./emulator-data --export-on-exit",
     "emulators:export": "firebase emulators:export ./emulator-data",
-    "emulators:import": "firebase emulators:start --import=./emulator-data"
+    "emulators:import": "firebase emulators:start --import=./emulator-data --export-on-exit"
   },
   "author": "Ruthesh Reddy",
   "license": "ISC",

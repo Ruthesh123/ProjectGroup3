@@ -2,3 +2,8 @@
 do**/
 .bm**/
 .idea/
+firebase-export-*/
+firestore_export/
+.firebase/
+.backend/firebase-debug.log
+.backend/firestore-debug.log

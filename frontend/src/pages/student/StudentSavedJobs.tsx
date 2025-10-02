@@ -1,12 +1,36 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, doc, updateDoc, deleteDoc, setDoc, Timestamp } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  doc,
+  updateDoc,
+  deleteDoc,
+  setDoc,
+  addDoc,
+  getDoc,
+  orderBy,
+  Timestamp,
+} from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Bookmark, BookmarkX, MapPin, Clock, DollarSign, Briefcase, Search, Filter, ExternalLink, Send } from 'lucide-react';
+import {
+  Bookmark,
+  BookmarkX,
+  MapPin,
+  Clock,
+  DollarSign,
+  Briefcase,
+  Search,
+  Filter,
+  ExternalLink,
+  Send,
+} from 'lucide-react';
 
 interface SavedJob {
-  id: string;
+  id: string;              // saved doc id (== jobId)
   jobId: string;
   title: string;
   companyName: string;
@@ -20,6 +44,9 @@ interface SavedJob {
   deadline?: Date;
   isActive: boolean;
   hasApplied: boolean;
+  employerId?: string;
+  resumeUrl?: string;      // optional if you want to prefill application
+  coverLetter?: string;    // optional if you want to prefill application
 }
 
 export const StudentSavedJobs = () => {
@@ -36,6 +63,9 @@ export const StudentSavedJobs = () => {
   useEffect(() => {
     if (user) {
       fetchSavedJobs();
+    } else {
+      setSavedJobs([]);
+      setFilteredJobs([]);
     }
   }, [user]);
 
@@ -48,117 +78,67 @@ export const StudentSavedJobs = () => {
 
     try {
       setLoading(true);
-      const savedJobsQuery = query(
-        collection(db, 'savedJobs'),
-        where('studentId', '==', user.uid)
-      );
 
-      const snapshot = await getDocs(savedJobsQuery);
-      const jobsData = await Promise.all(
-        snapshot.docs.map(async (docSnap) => {
-          const data = docSnap.data();
+      // READ FROM users/{user.id}/savedJobs  ✅
+      const savedCol = collection(db, 'users', user.id, 'savedJobs');
+      // try to order by savedAt if available; otherwise plain query
+      let savedSnap;
+      try {
+        savedSnap = await getDocs(query(savedCol, orderBy('savedAt', 'desc')));
+      } catch {
+        savedSnap = await getDocs(savedCol);
+      }
 
-          // Fetch job details
-          const jobQuery = query(
-            collection(db, 'jobs'),
-            where('id', '==', data.jobId)
-          );
-          const jobSnapshot = await getDocs(jobQuery);
-          const jobData = jobSnapshot.docs[0]?.data() || {};
+      const jobsData: SavedJob[] = [];
 
-          // Check if student has applied
-          const applicationQuery = query(
-            collection(db, 'applications'),
-            where('studentId', '==', user.uid),
-            where('jobId', '==', data.jobId)
-          );
-          const applicationSnapshot = await getDocs(applicationQuery);
-          const hasApplied = !applicationSnapshot.empty;
+      for (const d of savedSnap.docs) {
+        const data: any = d.data();
+        const jobId = data.jobId || d.id;
 
-          return {
-            id: docSnap.id,
-            jobId: data.jobId,
-            title: jobData.title || 'Unknown Position',
-            companyName: jobData.companyName || 'Unknown Company',
-            companyLogo: jobData.companyLogo,
-            location: jobData.location || 'Remote',
-            type: jobData.type || 'Full-time',
-            salary: jobData.salary,
-            description: jobData.description || '',
-            requirements: jobData.requirements || [],
-            savedDate: data.savedDate?.toDate() || new Date(),
-            deadline: jobData.deadline?.toDate(),
-            isActive: jobData.status === 'active',
-            hasApplied
-          } as SavedJob;
-        })
-      );
+        // fetch full job doc for rich details (title/companyName already denormalized)
+        let jobData: any = {};
+        try {
+          const jobDoc = await getDoc(doc(db, 'jobs', jobId));
+          if (jobDoc.exists()) jobData = jobDoc.data();
+        } catch (_) {}
 
+        // check applications for this user+job to mark "Applied"
+        const appsQ = query(
+          collection(db, 'applications'),
+          where('studentId', '==', user.id),       // ✅ use user.id
+          where('jobId', '==', jobId)
+        );
+        const appsSnap = await getDocs(appsQ);
+        const hasApplied = !appsSnap.empty;
+
+        jobsData.push({
+          id: d.id, // saved doc id (we set doc id == jobId in our save flow)
+          jobId,
+          title: jobData.title ?? data.title ?? 'Unknown Position',
+          companyName: jobData.companyName ?? data.companyName ?? 'Unknown Company',
+          companyLogo: jobData.companyLogo,
+          location: jobData.location ?? data.location ?? 'Remote',
+          type: jobData.type ?? data.type ?? 'Full-time',
+          salary:
+            typeof jobData.salary === 'string'
+              ? jobData.salary
+              : jobData.salary?.range || data.salary,
+          description: jobData.description ?? data.description ?? '',
+          requirements: Array.isArray(jobData.requirements) ? jobData.requirements : [],
+          savedDate: (data.savedAt?.toDate?.() || data.savedDate?.toDate?.() || new Date()) as Date,
+          deadline: jobData.deadline?.toDate?.(),
+          isActive: (jobData.status ?? 'active') === 'active',
+          hasApplied,
+          employerId: jobData.employerId,
+        });
+      }
+
+      // Stable sort by savedDate desc
+      jobsData.sort((a, b) => b.savedDate.getTime() - a.savedDate.getTime());
       setSavedJobs(jobsData);
     } catch (error) {
       console.error('Error fetching saved jobs:', error);
-      // Set mock data for development
-      setSavedJobs([
-        {
-          id: '1',
-          jobId: 'job1',
-          title: 'Frontend Developer Intern',
-          companyName: 'TechCorp',
-          location: 'Toronto, ON',
-          type: 'Internship',
-          salary: '$25-30/hour',
-          description: 'We are looking for a passionate Frontend Developer Intern to join our team.',
-          requirements: ['React', 'TypeScript', 'Tailwind CSS'],
-          savedDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-          deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-          isActive: true,
-          hasApplied: false
-        },
-        {
-          id: '2',
-          jobId: 'job2',
-          title: 'Full Stack Developer Co-op',
-          companyName: 'InnovateTech',
-          location: 'Waterloo, ON',
-          type: 'Co-op',
-          salary: '$30-35/hour',
-          description: 'Join our innovative team as a Full Stack Developer Co-op student.',
-          requirements: ['Node.js', 'React', 'MongoDB', 'AWS'],
-          savedDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-          deadline: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-          isActive: true,
-          hasApplied: true
-        },
-        {
-          id: '3',
-          jobId: 'job3',
-          title: 'Backend Developer Intern',
-          companyName: 'CloudSystems',
-          location: 'Remote',
-          type: 'Internship',
-          salary: '$28-32/hour',
-          description: 'Looking for a Backend Developer Intern to work on cloud-based solutions.',
-          requirements: ['Python', 'Django', 'PostgreSQL', 'Docker'],
-          savedDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-          isActive: true,
-          hasApplied: false
-        },
-        {
-          id: '4',
-          jobId: 'job4',
-          title: 'Mobile App Developer',
-          companyName: 'AppWorks',
-          location: 'Mississauga, ON',
-          type: 'Part-time',
-          salary: '$22-27/hour',
-          description: 'Seeking a Mobile App Developer for exciting projects.',
-          requirements: ['React Native', 'Flutter', 'iOS', 'Android'],
-          savedDate: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
-          deadline: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-          isActive: false,
-          hasApplied: false
-        }
-      ]);
+      setSavedJobs([]);
     } finally {
       setLoading(false);
     }
@@ -167,64 +147,81 @@ export const StudentSavedJobs = () => {
   const filterJobs = () => {
     let filtered = [...savedJobs];
 
-    // Filter by search term
     if (searchTerm) {
-      filtered = filtered.filter(job =>
-        job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        job.companyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        job.location.toLowerCase().includes(searchTerm.toLowerCase())
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(
+        (job) =>
+          job.title.toLowerCase().includes(term) ||
+          job.companyName.toLowerCase().includes(term) ||
+          job.location.toLowerCase().includes(term)
       );
     }
 
-    // Filter by type
     if (filterType === 'active') {
-      filtered = filtered.filter(job => job.isActive && (!job.deadline || job.deadline > new Date()));
+      filtered = filtered.filter(
+        (job) => job.isActive && (!job.deadline || job.deadline > new Date())
+      );
     } else if (filterType === 'expired') {
-      filtered = filtered.filter(job => !job.isActive || (job.deadline && job.deadline < new Date()));
+      filtered = filtered.filter(
+        (job) => !job.isActive || (job.deadline && job.deadline < new Date())
+      );
     } else if (filterType === 'applied') {
-      filtered = filtered.filter(job => job.hasApplied);
+      filtered = filtered.filter((job) => job.hasApplied);
     } else if (filterType === 'notApplied') {
-      filtered = filtered.filter(job => !job.hasApplied);
+      filtered = filtered.filter((job) => !job.hasApplied);
     }
 
-    // Sort by saved date (newest first)
     filtered.sort((a, b) => b.savedDate.getTime() - a.savedDate.getTime());
-
     setFilteredJobs(filtered);
   };
 
+  // Remove from saved: users/{user.id}/savedJobs/{jobId}  ✅
   const unsaveJob = async (savedJobId: string) => {
+    if (!user) return;
     if (!confirm('Are you sure you want to remove this job from your saved list?')) return;
 
     try {
-      await deleteDoc(doc(db, 'savedJobs', savedJobId));
-      setSavedJobs(savedJobs.filter(job => job.id !== savedJobId));
+      await deleteDoc(doc(db, 'users', user.id, 'savedJobs', savedJobId));
+      setSavedJobs((prev) => prev.filter((j) => j.id !== savedJobId));
     } catch (error) {
       console.error('Error removing saved job:', error);
       alert('Failed to remove job. Please try again.');
     }
   };
 
+  // Create application with your 8 fields + prevent duplicates  ✅
   const applyToJob = async (job: SavedJob) => {
     if (!user) return;
 
     try {
-      // Create application
-      await setDoc(doc(collection(db, 'applications')), {
-        jobId: job.jobId,
-        studentId: user.uid,
-        jobTitle: job.title,
-        companyName: job.companyName,
-        status: 'pending',
-        appliedDate: Timestamp.now(),
-        resumeUrl: '', // Would be populated from student profile
-        coverLetter: ''
+      // prevent double apply
+      const existsQ = query(
+        collection(db, 'applications'),
+        where('studentId', '==', user.id),
+        where('jobId', '==', job.jobId)
+      );
+      const existsSnap = await getDocs(existsQ);
+      if (!existsSnap.empty) {
+        alert('You have already applied to this job.');
+        return;
+      }
+
+      await addDoc(collection(db, 'applications'), {
+        companyName: job.companyName,         // 1
+        coverLetter: '',                      // 2 (fill from profile or a form)
+        employerId: job.employerId || '',     // 3
+        jobId: job.jobId,                     // 4
+        jobTitle: job.title,                  // 5
+        resume: '',                           // 6 (URL to resume)
+        status: 'pending',                    // 7
+        studentId: user.id,                   // 8
+        appliedDate: Timestamp.now(),         // extra (ok to have more fields)
+        lastUpdated: Timestamp.now(),
       });
 
-      // Update local state
-      setSavedJobs(savedJobs.map(j =>
-        j.id === job.id ? { ...j, hasApplied: true } : j
-      ));
+      setSavedJobs((prev) =>
+        prev.map((j) => (j.id === job.id ? { ...j, hasApplied: true } : j))
+      );
 
       alert('Application submitted successfully!');
     } catch (error) {
@@ -236,8 +233,7 @@ export const StudentSavedJobs = () => {
   const getDaysUntilDeadline = (deadline: Date) => {
     const now = new Date();
     const diffTime = deadline.getTime() - now.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
 
   if (loading) {
@@ -276,7 +272,9 @@ export const StudentSavedJobs = () => {
               <div>
                 <p className="text-sm text-gray-600">Active Jobs</p>
                 <p className="text-2xl font-bold text-green-600">
-                  {savedJobs.filter(job => job.isActive && (!job.deadline || job.deadline > new Date())).length}
+                  {savedJobs.filter(
+                    (job) => job.isActive && (!job.deadline || job.deadline > new Date())
+                  ).length}
                 </p>
               </div>
               <div className="bg-green-100 p-3 rounded-lg">
@@ -290,7 +288,7 @@ export const StudentSavedJobs = () => {
               <div>
                 <p className="text-sm text-gray-600">Applied</p>
                 <p className="text-2xl font-bold text-blue-600">
-                  {savedJobs.filter(job => job.hasApplied).length}
+                  {savedJobs.filter((job) => job.hasApplied).length}
                 </p>
               </div>
               <div className="bg-blue-100 p-3 rounded-lg">
@@ -304,7 +302,7 @@ export const StudentSavedJobs = () => {
               <div>
                 <p className="text-sm text-gray-600">Expiring Soon</p>
                 <p className="text-2xl font-bold text-orange-600">
-                  {savedJobs.filter(job => {
+                  {savedJobs.filter((job) => {
                     if (!job.deadline) return false;
                     const days = getDaysUntilDeadline(job.deadline);
                     return days > 0 && days <= 7;
@@ -431,11 +429,13 @@ export const StudentSavedJobs = () => {
                   {job.deadline && (
                     <div className="mb-4">
                       {getDaysUntilDeadline(job.deadline) > 0 ? (
-                        <span className={`text-sm ${
-                          getDaysUntilDeadline(job.deadline) <= 7
-                            ? 'text-orange-600 font-medium'
-                            : 'text-gray-600'
-                        }`}>
+                        <span
+                          className={`text-sm ${
+                            getDaysUntilDeadline(job.deadline) <= 7
+                              ? 'text-orange-600 font-medium'
+                              : 'text-gray-600'
+                          }`}
+                        >
                           <Clock className="inline h-3 w-3 mr-1" />
                           {getDaysUntilDeadline(job.deadline) === 1
                             ? 'Expires tomorrow'
@@ -462,9 +462,7 @@ export const StudentSavedJobs = () => {
                       <ExternalLink className="h-3 w-3" />
                     </button>
                     {job.hasApplied ? (
-                      <span className="text-sm text-green-600 font-medium">
-                        ✓ Applied
-                      </span>
+                      <span className="text-sm text-green-600 font-medium">✓ Applied</span>
                     ) : job.isActive && (!job.deadline || job.deadline > new Date()) ? (
                       <button
                         onClick={() => applyToJob(job)}
@@ -473,9 +471,7 @@ export const StudentSavedJobs = () => {
                         Apply Now
                       </button>
                     ) : (
-                      <span className="text-sm text-gray-500">
-                        Not Available
-                      </span>
+                      <span className="text-sm text-gray-500">Not Available</span>
                     )}
                   </div>
                 </div>

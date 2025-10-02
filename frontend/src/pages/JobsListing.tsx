@@ -7,6 +7,7 @@ import { ProfileDropdown } from '../components/shared/ProfileDropdown';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { SiteHeader } from '../components/shared/SiteHeader';
+import { useSavedJobs } from '../hooks/useSavedJobs'; 
 
 export const JobsListing: React.FC = () => {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -16,7 +17,10 @@ export const JobsListing: React.FC = () => {
   const [filterLocation, setFilterLocation] = useState('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const { user } = useAuth();
+  const uid = user?.id || null;
   const navigate = useNavigate();
+
+  const { isSaved, toggle } = useSavedJobs(uid);
 
   useEffect(() => {
     fetchJobs();
@@ -267,7 +271,10 @@ export const JobsListing: React.FC = () => {
                 key={job.id}
                 job={job}
                 onApply={handleApply}
-                onSave={handleSave}
+                onSave={() => {
+                  if (!uid) return navigate('/login');
+                  toggle(uid, job);
+              }}
               />
             ))}
           </div>
