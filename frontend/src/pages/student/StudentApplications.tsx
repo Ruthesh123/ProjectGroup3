@@ -60,6 +60,7 @@ export const StudentApplications = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Resolve a Firebase Timestamp or ISO/date-like into a Date
   const safeToDate = (v: any): Date | undefined => {
@@ -214,6 +215,7 @@ export const StudentApplications = () => {
         status: 'withdrawn',
         lastUpdated: Timestamp.now(),
       });
+      setMessage({ type: 'success', text: 'Your application has been withdrawn.' });
       if (uid) fetchApplications(uid);
     } catch (error: any) {
       console.error('Error withdrawing application:', error?.code, error?.message, error);
