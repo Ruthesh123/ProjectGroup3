@@ -1,47 +1,149 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users collection
+
+    /*************** Helpers ***************/
+    function userRole() {
+      return request.auth != null &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+             : null;
+    }
+    function isAdmin()     { return userRole() == 'admin'; }
+    function isEmployer()  { return userRole() == 'employer'; }
+    function isStudent()   { return userRole() == 'student'; }
+
+    // Does current user own the job?
+    function ownsJob(jobId) {
+      return (jobId is string)
+             && exists(/databases/$(database)/documents/jobs/$(jobId))
+             && get(/databases/$(database)/documents/jobs/$(jobId)).data.employerId == request.auth.uid;
+    }
+
+    // When you want to enforce approval-only visibility for students, set this to true.
+    // For demo TODAY keep false to avoid breaking anything unexpectedly.
+    function ENFORCE_APPROVED_JOBS_ONLY() { return false; }
+
+    /*************** users ***************/
     match /users/{userId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Jobs collection
+    /*************** jobs ***************/
     match /jobs/{jobId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'employer';
-    }
-
-    // Applications collection
-    match /applications/{applicationId} {
-      // Read if:
-      //  - student is the owner, OR
-      //  - employerId is stored on the application and matches, OR
-      //  - the employer who owns the related job (derived from the job doc)
+      // READ:
+      // - Admins & Employers can read all jobs.
+      // - Students: if ENFORCE_APPROVED_JOBS_ONLY() is false -> read all (current behavior)
+      //             if true -> only see approved jobs.
       allow read: if request.auth != null && (
-        resource.data.studentId == request.auth.uid ||
-        (resource.data.employerId is string && resource.data.employerId == request.auth.uid) ||
+        isAdmin() || isEmployer() ||
         (
-          (resource.data.jobId is string)
-          && exists(/databases/$(database)/documents/jobs/$(resource.data.jobId))
-          && get(/databases/$(database)/documents/jobs/$(resource.data.jobId)).data.employerId == request.auth.uid
+          isStudent() &&
+          (
+            ENFORCE_APPROVED_JOBS_ONLY() == false ||
+            (resource.data.status is string && resource.data.status == 'approved')
+          )
         )
       );
 
-      // Create if:
-      //  - authed user exists and has role 'student'
-      //  - they are creating for themselves
-      //  - jobId is a string and the job exists
-      allow create: if request.auth != null
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
-        && request.resource.data.studentId == request.auth.uid
-        && (request.resource.data.jobId is string)
-        && exists(/databases/$(database)/documents/jobs/$(request.resource.data.jobId));
+      // CREATE: only employers (or admins) may create jobs.
+      // Tip: require a status value on create; default to "submitted" or "draft".
+      allow create: if request.auth != null && (isEmployer() || isAdmin());
+
+      // UPDATE:
+      // - Employers: may edit their own jobs while NOT approved.
+      //   They cannot set status to 'approved' or 'rejected'.
+      // - Admins: can update any job and are the ONLY role that can set status to 'approved' or 'rejected'.
+      allow update: if request.auth != null && (
+        // Employer editing own job
+        (
+          isEmployer() && ownsJob(jobId) &&
+          // If job is already approved, employers cannot mutate it (except perhaps minor fields—keep simple: block).
+          resource.data.status != 'approved' &&
+          // Employers cannot approve/reject
+          !(
+            request.resource.data.status in ['approved', 'rejected']
+            && request.resource.data.status != resource.data.status
+          )
+        )
+        ||
+        // Admin can always update; they are allowed to set status freely.
+        isAdmin()
+      );
+
+      // DELETE:
+      // - Admins or owner employer can delete (optional; keep as you prefer)
+      allow delete: if request.auth != null && (isAdmin() || (isEmployer() && ownsJob(jobId)));
     }
 
+    /*************** applications ***************/
+    match /applications/{applicationId} {
+      // Who can read:
+      allow read: if request.auth != null && (
+        resource.data.studentId == request.auth.uid ||
+        // Employer who owns the app (via employerId or job ownership)
+        (
+          (resource.data.employerId is string && resource.data.employerId == request.auth.uid)
+          || (
+            (resource.data.jobId is string) &&
+            exists(/databases/$(database)/documents/jobs/$(resource.data.jobId)) &&
+            get(/databases/$(database)/documents/jobs/$(resource.data.jobId)).data.employerId == request.auth.uid
+          )
+        )
+        || isAdmin()
+      );
+
+      // Create: students creating for themselves; job must exist.
+      // If you flip approval enforcement, require job be approved.
+      allow create: if request.auth != null
+        && isStudent()
+        && request.resource.data.studentId == request.auth.uid
+        && (request.resource.data.jobId is string)
+        && exists(/databases/$(database)/documents/jobs/$(request.resource.data.jobId))
+        && (
+          ENFORCE_APPROVED_JOBS_ONLY() == false ||
+          get(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data.status == 'approved'
+        );
+
+      // Student can withdraw own pending/reviewing application (only status/lastUpdated)
+      allow update: if request.auth != null
+        && resource.data.studentId == request.auth.uid
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.jobId == resource.data.jobId
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status','lastUpdated'])
+        && resource.data.status in ['pending','reviewing']
+        && request.resource.data.status == 'withdrawn';
+
+      // Employer who owns the job can update limited fields (status/lastUpdated/notes)
+      allow update: if request.auth != null
+        && (
+          (resource.data.employerId is string && resource.data.employerId == request.auth.uid)
+          || (
+            (resource.data.jobId is string) &&
+            exists(/databases/$(database)/documents/jobs/$(resource.data.jobId)) &&
+            get(/databases/$(database)/documents/jobs/$(resource.data.jobId)).data.employerId == request.auth.uid
+          )
+        )
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.jobId == resource.data.jobId
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status','lastUpdated','notes'])
+        && (
+          (resource.data.status == 'pending' && request.resource.data.status in ['reviewing','accepted','rejected']) ||
+          (resource.data.status == 'reviewing' && request.resource.data.status in ['accepted','rejected']) ||
+          (request.resource.data.status == resource.data.status) // notes-only
+        );
+
+      // Admin can set any allowed status + notes (status/lastUpdated/notes only)
+      allow update: if request.auth != null
+        && isAdmin()
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.jobId == resource.data.jobId
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status','lastUpdated','notes'])
+        && request.resource.data.status in ['pending','reviewing','accepted','rejected','withdrawn'];
+    }
+
+    /*************** saved jobs ***************/
     match /users/{uid}/savedJobs/{jobId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }

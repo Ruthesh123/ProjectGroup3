@@ -19,8 +19,11 @@ import { EmployerProfile } from './pages/employer/EmployerProfile';
 import { EmployerJobs } from './pages/employer/EmployerJobs';
 import { EmployerApplicants } from './pages/employer/EmployerApplicants';
 import { EmployerAnalytics } from './pages/employer/EmployerAnalytics';
+import Settings from './pages/student/Settings';
 import { ApplyJob } from './pages/ApplyJob';
+import HelpSupport from './components/shared/HelpSupport';
 import './App.css';
+import { Profile } from './pages/Profile';
 
 function App() {
   return (
@@ -76,6 +79,8 @@ function App() {
           />
 
           {/* Student Routes */}
+          <Route path="/profile" element={<Profile />} />
+
           <Route
             path="/student/dashboard"
             element={
@@ -100,6 +105,11 @@ function App() {
               </ProtectedRoute>
             }
           />
+
+          <Route path="/help" element={<HelpSupport />} />
+
+          <Route path="/settings" element={<Settings />} />
+
           <Route path="/apply/:jobId" element={<ApplyJob />} />
 
           {/* Employer Routes */}

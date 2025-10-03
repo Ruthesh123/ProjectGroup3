@@ -42,7 +42,7 @@ export const ProfileDropdown: React.FC = () => {
     const profilePath =
       user?.role === 'admin' ? '/admin/profile' :
       user?.role === 'employer' ? '/employer/profile' :
-      '/student/profile';
+      '/profile';
     navigate(profilePath);
   };
 
@@ -131,7 +131,7 @@ export const ProfileDropdown: React.FC = () => {
             </button>
 
             <button
-              onClick={handleSettings}
+              onClick={() => navigate('/settings')}
               className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-3"
             >
               <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -160,10 +160,7 @@ export const ProfileDropdown: React.FC = () => {
 
             {/* Help & Support */}
             <button
-              onClick={() => {
-                setIsOpen(false);
-                // Add help/support functionality
-              }}
+              onClick={() => navigate('/help')}
               className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-3"
             >
               <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
