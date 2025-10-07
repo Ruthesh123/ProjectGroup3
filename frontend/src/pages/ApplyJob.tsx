@@ -54,7 +54,7 @@ export const ApplyJob: React.FC = () => {
         }
         const d = snap.data() as any;
         const j: Job = {
-          id: snap.id,
+          id: (snap as any).id ?? jobId,
           employerId: d.employerId || '',
           companyName: d.companyName || 'Unknown Company',
           title: d.title || 'Untitled Position',
@@ -89,7 +89,7 @@ export const ApplyJob: React.FC = () => {
           where('jobId', '==', jobId)
         );
         const snap = await getDocs(q);
-        setAlreadyApplied(!snap.empty);
+        setAlreadyApplied(!(snap as any).empty);
       } catch (e) {
         // Non-fatal
         console.error('Check alreadyApplied failed:', e);
@@ -136,7 +136,7 @@ export const ApplyJob: React.FC = () => {
           },
           (err) => reject(err),
           async () => {
-            const download = await getDownloadURL(task.snapshot.ref);
+            const download = await getDownloadURL((task as any).snapshot.ref);
             resolve(download);
           }
         );
@@ -176,7 +176,7 @@ export const ApplyJob: React.FC = () => {
 
       await addDoc(collection(db, 'applications'), {
         studentId: user.id,
-        employerId: job.employerId, // your rules use this
+        employerId: job.employerId,
         jobId,
         jobTitle: job.title,
         companyName: job.companyName,
@@ -240,7 +240,9 @@ export const ApplyJob: React.FC = () => {
         {/* Job summary */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <h2 className="text-xl font-semibold text-gray-900">{job.title}</h2>
-          <p className="text-gray-600">{job.companyName} • {job.location}</p>
+          <p className="text-gray-600">
+            {job.companyName} • {job.location}
+          </p>
           <div className="mt-2 text-sm text-gray-600 capitalize">{job.type.replace('-', ' ')}</div>
         </div>
 

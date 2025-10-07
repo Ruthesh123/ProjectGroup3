@@ -14,12 +14,18 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Testing types */
+    "types": ["vitest/globals", "@testing-library/jest-dom"],
+
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
+  "include": [
+    "src",
+    "vitest.config.ts"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
