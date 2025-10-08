@@ -1,487 +1,434 @@
-import { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { ProfileDropdown } from '../../components/shared/ProfileDropdown';
 import {
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
-} from 'recharts';
-import {
-  Users, Briefcase, Eye, Clock, TrendingUp,
-  Calendar, Download, Filter, ChevronDown
-} from 'lucide-react';
+  collection,
+  query,
+  where,
+  onSnapshot,
+  getDocs,
+  doc,
+  getDoc,
+  QuerySnapshot,
+  DocumentData,
+} from 'firebase/firestore';
+import { db } from '../../config/firebase';
 
-interface AnalyticsData {
-  totalJobs: number;
-  activeJobs: number;
-  totalApplications: number;
-  pendingApplications: number;
-  acceptedApplications: number;
-  rejectedApplications: number;
-  totalViews: number;
-  averageTimeToHire: number;
-  applicationTrend: { date: string; count: number }[];
-  jobsByCategory: { name: string; value: number }[];
-  applicationsByStatus: { name: string; value: number; color: string }[];
-  topPerformingJobs: { title: string; applications: number; views: number }[];
+// Local types to avoid conflicts with your global Application type
+type AppStatus = 'pending' | 'reviewing' | 'accepted' | 'rejected' | 'withdrawn' | string;
+
+interface JobRow {
+  id: string;
+  title: string;
+  companyName: string;
+  status: string;
+  viewCount: number;
+  applicationCount: number;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
-export const EmployerAnalytics = () => {
-  const { user } = useAuth();
+interface ApplicationRow {
+  id: string;
+  jobId: string;
+  studentId?: string;
+  status: AppStatus;
+  appliedAt: Date;       // normalized, never undefined
+  lastUpdated?: Date;
+}
+
+const toDateSafe = (v: any): Date | undefined => {
+  if (!v) return undefined;
+  if (typeof v?.toDate === 'function') return v.toDate();
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? undefined : d;
+};
+
+const chunk = <T,>(arr: T[], n = 10): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+};
+
+export const EmployerAnalytics: React.FC = () => {
+  const { user } = useAuth() as any;
+  const navigate = useNavigate();
+
+  // Prefer Firebase uid; fallback to custom id if your AuthContext uses that
+  const uid: string | null = user?.uid ?? user?.id ?? null;
+
+  const [jobs, setJobs] = useState<JobRow[]>([]);
+  const [applications, setApplications] = useState<ApplicationRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
-  const [dateRange, setDateRange] = useState('30days');
-  const [selectedMetric, setSelectedMetric] = useState('overview');
+  const [error, setError] = useState<string | null>(null);
 
+  // ===== Listen to employer's jobs =====
   useEffect(() => {
-    if (user) {
-      fetchAnalytics();
-    }
-  }, [user, dateRange]);
+    if (!uid) return;
+    setLoading(true);
+    setError(null);
 
-  const fetchAnalytics = async () => {
-    if (!user) return;
-
-    try {
-      setLoading(true);
-
-      // Calculate date range
-      const now = new Date();
-      const startDate = new Date();
-      if (dateRange === '7days') {
-        startDate.setDate(now.getDate() - 7);
-      } else if (dateRange === '30days') {
-        startDate.setDate(now.getDate() - 30);
-      } else if (dateRange === '90days') {
-        startDate.setDate(now.getDate() - 90);
+    const qJobs = query(collection(db, 'jobs'), where('employerId', '==', uid));
+    const unsub = onSnapshot(
+      qJobs,
+      (snap) => {
+        const rows: JobRow[] = snap.docs.map((d) => {
+          const data: any = d.data();
+          return {
+            id: d.id,
+            title: String(data.title || 'Untitled'),
+            companyName: String(data.companyName || 'Unknown'),
+            status: String(data.status || 'active'),
+            viewCount: Number(data.viewCount || 0),
+            applicationCount: Number(data.applicationCount || 0),
+            createdAt: toDateSafe(data.createdAt),
+            updatedAt: toDateSafe(data.updatedAt),
+          };
+        });
+        setJobs(rows);
+      },
+      (err) => {
+        console.error('Jobs listener error:', err);
+        setError('Failed to load jobs.');
       }
-
-      // Fetch jobs
-      const jobsQuery = query(
-        collection(db, 'jobs'),
-        where('employerId', '==', user.uid)
-      );
-      const jobsSnapshot = await getDocs(jobsQuery);
-      const jobs = jobsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-      // Fetch applications
-      const applicationPromises = jobs.map(async (job: any) => {
-        const appQuery = query(
-          collection(db, 'applications'),
-          where('jobId', '==', job.id)
-        );
-        const appSnapshot = await getDocs(appQuery);
-        return appSnapshot.docs.map(doc => ({
-          ...doc.data(),
-          jobTitle: job.title,
-          jobId: job.id
-        }));
-      });
-
-      const allApplications = (await Promise.all(applicationPromises)).flat();
-
-      // Calculate metrics
-      const totalJobs = jobs.length;
-      const activeJobs = jobs.filter((job: any) => job.status === 'active').length;
-      const totalApplications = allApplications.length;
-      const pendingApplications = allApplications.filter((app: any) => app.status === 'pending').length;
-      const acceptedApplications = allApplications.filter((app: any) => app.status === 'accepted').length;
-      const rejectedApplications = allApplications.filter((app: any) => app.status === 'rejected').length;
-
-      // Calculate total views (mock data for now)
-      const totalViews = jobs.reduce((sum: number, job: any) => sum + (job.views || Math.floor(Math.random() * 100)), 0);
-
-      // Calculate average time to hire (mock)
-      const averageTimeToHire = 14; // days
-
-      // Application trend (last 30 days)
-      const applicationTrend = [];
-      for (let i = 29; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        const count = Math.floor(Math.random() * 10) + 1;
-        applicationTrend.push({ date: dateStr, count });
-      }
-
-      // Jobs by category
-      const categoryCount: Record<string, number> = {};
-      jobs.forEach((job: any) => {
-        const category = job.category || 'Other';
-        categoryCount[category] = (categoryCount[category] || 0) + 1;
-      });
-      const jobsByCategory = Object.entries(categoryCount).map(([name, value]) => ({ name, value }));
-
-      // Applications by status
-      const applicationsByStatus = [
-        { name: 'Pending', value: pendingApplications, color: '#FFA500' },
-        { name: 'Accepted', value: acceptedApplications, color: '#10B981' },
-        { name: 'Rejected', value: rejectedApplications, color: '#EF4444' }
-      ];
-
-      // Top performing jobs
-      const jobApplicationCount: Record<string, { title: string; applications: number; views: number }> = {};
-      jobs.forEach((job: any) => {
-        const appCount = allApplications.filter((app: any) => app.jobId === job.id).length;
-        jobApplicationCount[job.id] = {
-          title: job.title,
-          applications: appCount,
-          views: job.views || Math.floor(Math.random() * 100)
-        };
-      });
-      const topPerformingJobs = Object.values(jobApplicationCount)
-        .sort((a, b) => b.applications - a.applications)
-        .slice(0, 5);
-
-      setAnalytics({
-        totalJobs,
-        activeJobs,
-        totalApplications,
-        pendingApplications,
-        acceptedApplications,
-        rejectedApplications,
-        totalViews,
-        averageTimeToHire,
-        applicationTrend,
-        jobsByCategory,
-        applicationsByStatus,
-        topPerformingJobs
-      });
-    } catch (error) {
-      console.error('Error fetching analytics:', error);
-      // Set mock data on error
-      setAnalytics({
-        totalJobs: 12,
-        activeJobs: 8,
-        totalApplications: 156,
-        pendingApplications: 45,
-        acceptedApplications: 78,
-        rejectedApplications: 33,
-        totalViews: 2340,
-        averageTimeToHire: 14,
-        applicationTrend: Array.from({ length: 30 }, (_, i) => ({
-          date: new Date(Date.now() - (29 - i) * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          count: Math.floor(Math.random() * 10) + 1
-        })),
-        jobsByCategory: [
-          { name: 'Software Development', value: 5 },
-          { name: 'Marketing', value: 3 },
-          { name: 'Design', value: 2 },
-          { name: 'Sales', value: 2 }
-        ],
-        applicationsByStatus: [
-          { name: 'Pending', value: 45, color: '#FFA500' },
-          { name: 'Accepted', value: 78, color: '#10B981' },
-          { name: 'Rejected', value: 33, color: '#EF4444' }
-        ],
-        topPerformingJobs: [
-          { title: 'Senior Frontend Developer', applications: 34, views: 456 },
-          { title: 'Marketing Manager', applications: 28, views: 389 },
-          { title: 'UX Designer', applications: 22, views: 312 },
-          { title: 'Sales Representative', applications: 18, views: 267 },
-          { title: 'Junior Developer', applications: 15, views: 234 }
-        ]
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const exportData = () => {
-    if (!analytics) return;
-
-    const csvContent = `
-Employer Analytics Report
-Generated: ${new Date().toLocaleDateString()}
-Date Range: ${dateRange}
-
-Overview Metrics
-Total Jobs,${analytics.totalJobs}
-Active Jobs,${analytics.activeJobs}
-Total Applications,${analytics.totalApplications}
-Pending Applications,${analytics.pendingApplications}
-Accepted Applications,${analytics.acceptedApplications}
-Rejected Applications,${analytics.rejectedApplications}
-Total Views,${analytics.totalViews}
-Average Time to Hire,${analytics.averageTimeToHire} days
-
-Top Performing Jobs
-Title,Applications,Views
-${analytics.topPerformingJobs.map(job => `${job.title},${job.applications},${job.views}`).join('\n')}
-    `.trim();
-
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `analytics_${dateRange}_${Date.now()}.csv`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
     );
-  }
 
-  if (!analytics) {
+    return () => unsub();
+  }, [uid]);
+
+  // ===== Listen to employer's applications (employerId first; fallback to jobId chunks) =====
+  useEffect(() => {
+    if (!uid) return;
+
+    setApplications([]);
+    setLoading(true);
+
+    const qApps = query(collection(db, 'applications'), where('employerId', '==', uid));
+    const fallbackUnsubs: Array<() => void> = [];
+    let primaryUnsub: (() => void) | null = null;
+
+    const normalizeAppsSnapshot = (snap: QuerySnapshot<DocumentData>) => {
+      return snap.docs.map((d) => {
+        const data: any = d.data();
+        const applied = toDateSafe(data.appliedAt ?? data.appliedDate) || new Date(0);
+        const lastUpd = toDateSafe(data.lastUpdated ?? data.updatedAt);
+        const row: ApplicationRow = {
+          id: d.id,
+          jobId: String(data.jobId || ''),
+          studentId: data.studentId ? String(data.studentId) : undefined,
+          status: (data.status ?? 'pending') as AppStatus,
+          appliedAt: applied,
+          lastUpdated: lastUpd,
+        };
+        return row;
+      });
+    };
+
+    const mergeAndSet = (list: ApplicationRow[]) => {
+      setApplications((prev) => {
+        const map = new Map<string, ApplicationRow>();
+        prev.forEach((p) => map.set(p.id, p));
+        list.forEach((n) => map.set(n.id, n));
+        // newest by lastUpdated -> appliedAt
+        const arr = Array.from(map.values()).sort((a, b) => {
+          const aT = (a.lastUpdated ?? a.appliedAt).getTime();
+          const bT = (b.lastUpdated ?? b.appliedAt).getTime();
+          return bT - aT;
+        });
+        return arr;
+      });
+    };
+
+    const handlePrimary = async (snap: QuerySnapshot<DocumentData>) => {
+      if (!snap.empty) {
+        mergeAndSet(normalizeAppsSnapshot(snap));
+        setLoading(false);
+        return;
+      }
+
+      // Fallback: if employerId isn't stored on applications, read by jobId chunks (<=10)
+      if (jobs.length > 0) {
+        if (primaryUnsub) primaryUnsub();
+        const idChunks = chunk(jobs.map((j) => j.id), 10);
+        setApplications([]);
+        idChunks.forEach((ids) => {
+          const qChunk = query(collection(db, 'applications'), where('jobId', 'in', ids));
+          const unsub = onSnapshot(
+            qChunk,
+            (s) => mergeAndSet(normalizeAppsSnapshot(s)),
+            (e) => console.error('Applications fallback error:', e)
+          );
+          fallbackUnsubs.push(unsub);
+        });
+      }
+      setLoading(false);
+    };
+
+    primaryUnsub = onSnapshot(qApps, handlePrimary, (err) => {
+      console.error('Applications listener error:', err);
+      setError('Failed to load applications.');
+      setLoading(false);
+    });
+
+    return () => {
+      if (primaryUnsub) primaryUnsub();
+      if (fallbackUnsubs.length) fallbackUnsubs.forEach((u) => u());
+    };
+  }, [uid, jobs]);
+
+  // ===== Derived metrics =====
+  const totalJobs = jobs.length;
+  const activeJobs = useMemo(() => jobs.filter((j) => j.status === 'active').length, [jobs]);
+  const totalViews = useMemo(() => jobs.reduce((sum, j) => sum + (j.viewCount || 0), 0), [jobs]);
+  const totalApplications = applications.length;
+
+  const avgApplicantsPerJob = totalJobs ? (totalApplications / totalJobs) : 0;
+  const conversionRate = totalViews ? (totalApplications / totalViews) : 0;
+
+  // Top jobs by applicants (use live applications count by job for accuracy)
+  const appsByJob = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of applications) {
+      if (!a.jobId) continue;
+      m.set(a.jobId, (m.get(a.jobId) || 0) + 1);
+    }
+    return m;
+  }, [applications]);
+
+  const topByApplicants = useMemo(() => {
+    const rows = jobs
+      .map((j) => ({ job: j, count: appsByJob.get(j.id) || 0 }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+    return rows;
+  }, [jobs, appsByJob]);
+
+  const topByViews = useMemo(() => {
+    return [...jobs].sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0)).slice(0, 5);
+  }, [jobs]);
+
+  // Applications trend (last 30 days)
+  const dailySeries = useMemo(() => {
+    const days = 30;
+    const end = new Date();
+    end.setHours(0, 0, 0, 0);
+    const start = new Date(end);
+    start.setDate(start.getDate() - (days - 1));
+
+    const buckets: { [ymd: string]: number } = {};
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      buckets[key] = 0;
+    }
+
+    for (const a of applications) {
+      const d = new Date(a.appliedAt);
+      d.setHours(0, 0, 0, 0);
+      const key = d.toISOString().slice(0, 10);
+      if (key in buckets) buckets[key] += 1;
+    }
+
+    const series = Object.entries(buckets).map(([date, count]) => ({ date, count }));
+    const max = series.reduce((m, x) => Math.max(m, x.count), 0);
+    return { series, max };
+  }, [applications]);
+
+  if (!uid) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-gray-500 mb-4">No analytics data available</p>
-          <button
-            onClick={fetchAnalytics}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            Retry
-          </button>
-        </div>
+      <div className="min-h-screen bg-gray-50 grid place-items-center">
+        <p className="text-gray-600">Please sign in as an employer to view analytics.</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Analytics Dashboard</h1>
-              <p className="text-gray-600 mt-1">Track your recruitment performance</p>
-            </div>
-            <div className="flex items-center gap-4 mt-4 md:mt-0">
-              {/* Date Range Selector */}
-              <div className="relative">
-                <select
-                  value={dateRange}
-                  onChange={(e) => setDateRange(e.target.value)}
-                  className="pl-10 pr-10 py-2 border border-gray-300 rounded-lg appearance-none bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="7days">Last 7 days</option>
-                  <option value="30days">Last 30 days</option>
-                  <option value="90days">Last 90 days</option>
-                </select>
-                <Calendar className="absolute left-3 top-2.5 h-5 w-5 text-gray-400 pointer-events-none" />
-                <ChevronDown className="absolute right-3 top-2.5 h-5 w-5 text-gray-400 pointer-events-none" />
-              </div>
-
-              {/* Export Button */}
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <div className="flex items-center">
               <button
-                onClick={exportData}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                onClick={() => navigate('/employer/dashboard')}
+                className="mr-4 p-2 hover:bg-gray-100 rounded-lg"
+                title="Back to Dashboard"
               >
-                <Download className="h-4 w-4" />
-                Export
+                <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
               </button>
+              <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
             </div>
+            <ProfileDropdown />
           </div>
         </div>
+      </header>
+
+      {/* Main */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        {error && (
+          <div className="mb-6 p-4 rounded-lg border border-red-200 bg-red-50 text-red-700">
+            {error}
+          </div>
+        )}
 
         {/* Key Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Total Jobs</p>
-                <p className="text-2xl font-bold text-gray-900">{analytics.totalJobs}</p>
-                <p className="text-green-600 text-sm mt-1">
-                  {analytics.activeJobs} active
-                </p>
-              </div>
-              <div className="bg-blue-100 p-3 rounded-lg">
-                <Briefcase className="h-6 w-6 text-blue-600" />
-              </div>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <p className="text-sm text-gray-600">Active Jobs</p>
+            <p className="text-2xl font-bold text-gray-900">{loading ? '—' : activeJobs}</p>
           </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Total Applications</p>
-                <p className="text-2xl font-bold text-gray-900">{analytics.totalApplications}</p>
-                <p className="text-orange-600 text-sm mt-1">
-                  {analytics.pendingApplications} pending
-                </p>
-              </div>
-              <div className="bg-green-100 p-3 rounded-lg">
-                <Users className="h-6 w-6 text-green-600" />
-              </div>
-            </div>
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <p className="text-sm text-gray-600">Total Jobs</p>
+            <p className="text-2xl font-bold text-gray-900">{loading ? '—' : totalJobs}</p>
           </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Total Views</p>
-                <p className="text-2xl font-bold text-gray-900">{analytics.totalViews.toLocaleString()}</p>
-                <p className="text-blue-600 text-sm mt-1">
-                  <TrendingUp className="inline h-3 w-3 mr-1" />
-                  12% increase
-                </p>
-              </div>
-              <div className="bg-purple-100 p-3 rounded-lg">
-                <Eye className="h-6 w-6 text-purple-600" />
-              </div>
-            </div>
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <p className="text-sm text-gray-600">Total Views</p>
+            <p className="text-2xl font-bold text-gray-900">{loading ? '—' : totalViews}</p>
           </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-sm">Avg. Time to Hire</p>
-                <p className="text-2xl font-bold text-gray-900">{analytics.averageTimeToHire} days</p>
-                <p className="text-gray-600 text-sm mt-1">
-                  Industry avg: 23 days
-                </p>
-              </div>
-              <div className="bg-orange-100 p-3 rounded-lg">
-                <Clock className="h-6 w-6 text-orange-600" />
-              </div>
-            </div>
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <p className="text-sm text-gray-600">Total Applicants</p>
+            <p className="text-2xl font-bold text-gray-900">{loading ? '—' : totalApplications}</p>
+          </div>
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <p className="text-sm text-gray-600">Avg Applicants / Job</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {loading ? '—' : avgApplicantsPerJob.toFixed(1)}
+            </p>
           </div>
         </div>
 
-        {/* Charts Row 1 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* Application Trend */}
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Application Trend</h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={analytics.applicationTrend}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip />
-                <Line type="monotone" dataKey="count" stroke="#3B82F6" strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
+        {/* Trend (last 30 days) */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-8">
+          <div className="px-6 py-4 border-b">
+            <h3 className="text-lg font-semibold text-gray-900">Applications (Last 30 Days)</h3>
           </div>
-
-          {/* Application Status Distribution */}
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Application Status</h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie
-                  data={analytics.applicationsByStatus}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, value }) => `${name}: ${value}`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {analytics.applicationsByStatus.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Charts Row 2 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* Jobs by Category */}
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Jobs by Category</h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={analytics.jobsByCategory}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="value" fill="#3B82F6" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Top Performing Jobs */}
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Top Performing Jobs</h3>
-            <div className="space-y-3">
-              {analytics.topPerformingJobs.map((job, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex-1">
-                    <p className="font-medium text-gray-900 text-sm">{job.title}</p>
-                    <div className="flex items-center gap-4 mt-1">
-                      <span className="text-xs text-gray-600">
-                        <Users className="inline h-3 w-3 mr-1" />
-                        {job.applications} applications
-                      </span>
-                      <span className="text-xs text-gray-600">
-                        <Eye className="inline h-3 w-3 mr-1" />
-                        {job.views} views
-                      </span>
+          <div className="px-6 py-6">
+            {loading ? (
+              <div className="h-24 bg-gray-100 rounded animate-pulse" />
+            ) : (
+              <div className="space-y-2">
+                {/* simple horizontal bars without extra libs */}
+                {dailySeries.series.map(({ date, count }) => {
+                  const pct = dailySeries.max ? Math.round((count / dailySeries.max) * 100) : 0;
+                  const label = new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                  return (
+                    <div key={date} className="flex items-center gap-3">
+                      <div className="w-20 text-xs text-gray-500">{label}</div>
+                      <div className="flex-1 h-3 bg-gray-100 rounded">
+                        <div
+                          className="h-3 rounded bg-blue-600 transition-all"
+                          style={{ width: `${pct}%` }}
+                          title={`${count} application${count !== 1 ? 's' : ''}`}
+                        />
+                      </div>
+                      <div className="w-10 text-xs text-gray-600 text-right">{count}</div>
                     </div>
+                  );
+                })}
+                {dailySeries.max === 0 && (
+                  <p className="text-sm text-gray-500">No applications in the last 30 days.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Top Jobs by Applicants */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="px-6 py-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Top Jobs by Applicants</h3>
+            </div>
+            <div className="divide-y">
+              {loading ? (
+                [1,2,3,4,5].map(i => (
+                  <div key={i} className="px-6 py-4 flex items-center justify-between animate-pulse">
+                    <div className="h-4 w-48 bg-gray-100 rounded" />
+                    <div className="h-4 w-10 bg-gray-100 rounded" />
                   </div>
-                  <div className="text-right">
-                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${
-                      index === 0 ? 'bg-yellow-100 text-yellow-800' :
-                      index === 1 ? 'bg-gray-100 text-gray-800' :
-                      index === 2 ? 'bg-orange-100 text-orange-800' :
-                      'bg-blue-100 text-blue-800'
-                    }`}>
-                      #{index + 1}
-                    </span>
+                ))
+              ) : topByApplicants.length === 0 ? (
+                <div className="px-6 py-8 text-sm text-gray-500">No applications yet.</div>
+              ) : (
+                topByApplicants.map(({ job, count }) => (
+                  <div key={job.id} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50">
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900 truncate">{job.title}</div>
+                      <div className="text-sm text-gray-500">{job.companyName}</div>
+                    </div>
+                    <div className="text-sm font-semibold text-gray-900">{count}</div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Top Jobs by Views */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="px-6 py-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Top Jobs by Views</h3>
+            </div>
+            <div className="divide-y">
+              {loading ? (
+                [1,2,3,4,5].map(i => (
+                  <div key={i} className="px-6 py-4 flex items-center justify-between animate-pulse">
+                    <div className="h-4 w-48 bg-gray-100 rounded" />
+                    <div className="h-4 w-10 bg-gray-100 rounded" />
+                  </div>
+                ))
+              ) : topByViews.length === 0 ? (
+                <div className="px-6 py-8 text-sm text-gray-500">No views yet.</div>
+              ) : (
+                topByViews.map((job) => (
+                  <div key={job.id} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50">
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900 truncate">{job.title}</div>
+                      <div className="text-sm text-gray-500">{job.companyName}</div>
+                    </div>
+                    <div className="text-sm font-semibold text-gray-900">{job.viewCount}</div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
 
-        {/* Performance Insights */}
-        <div className="bg-white rounded-lg shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Performance Insights</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-green-800 font-medium">Acceptance Rate</span>
-                <TrendingUp className="h-4 w-4 text-green-600" />
-              </div>
-              <p className="text-2xl font-bold text-green-900">
-                {analytics.acceptedApplications > 0
-                  ? Math.round((analytics.acceptedApplications / (analytics.totalApplications - analytics.pendingApplications)) * 100)
-                  : 0}%
+        {/* Conversion */}
+        <div className="mt-8 bg-white rounded-lg shadow-sm border border-gray-200">
+          <div className="px-6 py-4 border-b">
+            <h3 className="text-lg font-semibold text-gray-900">Conversion</h3>
+          </div>
+          <div className="px-6 py-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="p-4 border rounded-lg">
+              <p className="text-sm text-gray-600">Views → Applicants</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {loading ? '—' : `${(conversionRate * 100).toFixed(1)}%`}
               </p>
-              <p className="text-sm text-green-700 mt-1">Above industry average</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {totalApplications} / {totalViews} ({totalViews === 0 ? 'n/a' : 'last total'})
+              </p>
             </div>
-
-            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-blue-800 font-medium">Response Rate</span>
-                <Users className="h-4 w-4 text-blue-600" />
-              </div>
-              <p className="text-2xl font-bold text-blue-900">
-                {analytics.totalApplications > 0
-                  ? Math.round(((analytics.acceptedApplications + analytics.rejectedApplications) / analytics.totalApplications) * 100)
-                  : 0}%
-              </p>
-              <p className="text-sm text-blue-700 mt-1">Applications reviewed</p>
+            <div className="p-4 border rounded-lg">
+              <p className="text-sm text-gray-600">Applicants</p>
+              <p className="text-2xl font-bold text-gray-900">{loading ? '—' : totalApplications}</p>
+              <p className="text-xs text-gray-500 mt-1">All time</p>
             </div>
-
-            <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-purple-800 font-medium">Conversion Rate</span>
-                <Eye className="h-4 w-4 text-purple-600" />
-              </div>
-              <p className="text-2xl font-bold text-purple-900">
-                {analytics.totalViews > 0
-                  ? ((analytics.totalApplications / analytics.totalViews) * 100).toFixed(1)
-                  : '0'}%
-              </p>
-              <p className="text-sm text-purple-700 mt-1">Views to applications</p>
+            <div className="p-4 border rounded-lg">
+              <p className="text-sm text-gray-600">Views</p>
+              <p className="text-2xl font-bold text-gray-900">{loading ? '—' : totalViews}</p>
+              <p className="text-xs text-gray-500 mt-1">All time</p>
             </div>
           </div>
         </div>
+
       </div>
     </div>
   );
 };
+
+export default EmployerAnalytics;

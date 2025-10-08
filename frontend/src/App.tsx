@@ -13,6 +13,7 @@ import { AdminSettings } from './pages/admin/AdminSettings';
 import { StudentDashboard } from './pages/student/StudentDashboard';
 import { StudentApplications } from './pages/student/StudentApplications';
 import { StudentSavedJobs } from './pages/student/StudentSavedJobs';
+import JobDetails from './pages/student/JobDetails';
 import { EmployerDashboard } from './pages/employer/EmployerDashboard';
 import { PostJob } from './pages/employer/PostJob';
 import { EmployerProfile } from './pages/employer/EmployerProfile';
@@ -105,6 +106,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/jobs/:id" element={<JobDetails />} />
 
           <Route path="/help" element={<HelpSupport />} />
 

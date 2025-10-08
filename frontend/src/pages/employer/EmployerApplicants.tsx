@@ -1,21 +1,67 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  onSnapshot,
+  doc,
+  getDoc,
+  updateDoc,
+  addDoc,            // ✅ was missing
+  Timestamp,
+  QuerySnapshot,
+  DocumentData,
+} from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { Application, Job } from '../../types';
+import { Job } from '../../types';            // ✅ don’t import Application to avoid extends mismatch
 import { Modal } from '../../components/shared/Modal';
 
-interface ApplicationWithJob extends Application {
+// Status used in this page (wider than your global type)
+type AppStatus = 'pending' | 'reviewing' | 'accepted' | 'rejected' | 'withdrawn' | string;
+
+// Self-contained row shape used by this UI (no extends)
+interface ApplicationWithJob {
+  id: string;
+  studentId: string;
+  jobId: string;
+  jobTitle: string;
+  companyName: string;
+  status: AppStatus;
+  appliedAt: Date;            // ✅ always a Date so no undefined error
+  lastUpdated?: Date;
+
+  // optional extras
+  coverLetter?: string;
+  notes?: string;
+  resume?: string;            // url string if present
   studentEmail?: string;
   studentName?: string;
 }
 
+const toDateSafe = (v: any): Date | undefined => {
+  if (!v) return undefined;
+  if (typeof v?.toDate === 'function') return v.toDate();
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? undefined : d;
+};
+
+const chunk = <T,>(arr: T[], n = 10): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+};
+
 export const EmployerApplicants: React.FC = () => {
-  const { user } = useAuth();
+  const { user } = useAuth() as any;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const jobIdFilter = searchParams.get('jobId');
+
+  // prefer Firebase uid; fallback to custom id
+  const uid: string | null = user?.uid ?? user?.id ?? null;
 
   const [applications, setApplications] = useState<ApplicationWithJob[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -24,133 +70,182 @@ export const EmployerApplicants: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | string>('all');
   const [filterJob, setFilterJob] = useState<string>(jobIdFilter || 'all');
+  const [error, setError] = useState<string | null>(null);
 
+  // cache student meta
+  const studentMetaRef = useRef<Map<string, { name?: string; email?: string }>>(new Map());
+
+  // ----- Live jobs -----
   useEffect(() => {
-    if (user) {
-      fetchData();
-    }
-  }, [user]);
-
-  const fetchData = async () => {
-    if (!user) return;
-
+    if (!uid) return;
     setLoading(true);
-    try {
-      // First, fetch employer's jobs
-      const jobsQuery = query(collection(db, 'jobs'), where('employerId', '==', user.id));
-      const jobsSnapshot = await getDocs(jobsQuery);
-      const jobsList: Job[] = [];
-      const jobIds: string[] = [];
+    setError(null);
 
-      jobsSnapshot.forEach((doc) => {
-        const data = doc.data();
-        jobsList.push({
-          id: doc.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          updatedAt: data.updatedAt?.toDate() || new Date(),
-        } as Job);
-        jobIds.push(doc.id);
-      });
+    const qJobs = query(collection(db, 'jobs'), where('employerId', '==', uid));
+    const unsubJobs = onSnapshot(
+      qJobs,
+      (snap) => {
+        const list: Job[] = snap.docs.map((d) => {
+          const data: any = d.data();
+          return {
+            id: d.id,
+            ...data,
+            createdAt: toDateSafe(data.createdAt) || new Date(0),
+            updatedAt: toDateSafe(data.updatedAt) || new Date(0),
+          } as Job;
+        });
+        setJobs(list);
+      },
+      (err) => {
+        console.error('Jobs listener error:', err);
+        setError('Failed to load jobs.');
+      }
+    );
 
-      setJobs(jobsList);
+    return () => unsubJobs();
+  }, [uid]);
 
-      // Then fetch applications for those jobs
-      if (jobIds.length > 0) {
-        const appsQuery = query(collection(db, 'applications'), where('jobId', 'in', jobIds));
-        const appsSnapshot = await getDocs(appsQuery);
-        const appsList: ApplicationWithJob[] = [];
+  // ----- Live applications (prefers employerId, falls back to jobId chunks) -----
+  useEffect(() => {
+    if (!uid) return;
 
-        for (const docSnapshot of appsSnapshot.docs) {
-          const data = docSnapshot.data();
+    setApplications([]);
+    setLoading(true);
 
-          // Get student info
-          let studentEmail = 'Unknown';
-          let studentName = 'Unknown Student';
+    const qAppsByEmployer = query(collection(db, 'applications'), where('employerId', '==', uid));
+    const fallbackUnsubs: Array<() => void> = [];
+    let primaryUnsub: (() => void) | null = null;
 
-          try {
-            const studentDoc = await getDocs(
-              query(collection(db, 'users'), where('id', '==', data.studentId))
-            );
-            if (!studentDoc.empty) {
-              const studentData = studentDoc.docs[0].data();
-              studentEmail = studentData.email || 'Unknown';
-              studentName = studentData.name || studentEmail;
+    const handleAppsSnapshot = async (snap: QuerySnapshot<DocumentData>) => {
+      if (snap.empty && jobs.length > 0) {
+        // fallback: chunk by jobId (<=10)
+        if (primaryUnsub) primaryUnsub();
+        const chunks = chunk(jobs.map(j => j.id), 10);
+        setApplications([]);
+        chunks.forEach((ids) => {
+          const qChunk = query(collection(db, 'applications'), where('jobId', 'in', ids));
+          const unsub = onSnapshot(
+            qChunk,
+            (s) => mergeAppsSnapshot(s),
+            (e) => console.error('Apps fallback error:', e)
+          );
+          fallbackUnsubs.push(unsub);
+        });
+        setLoading(false);
+        return;
+      }
+
+      mergeAppsSnapshot(snap);
+      setLoading(false);
+    };
+
+    const mergeAppsSnapshot = async (snap: QuerySnapshot<DocumentData>) => {
+      const list: ApplicationWithJob[] = await Promise.all(
+        snap.docs.map(async (d) => {
+          const data: any = d.data();
+
+          // normalized dates; ensure appliedAt is ALWAYS a Date
+          const applied = toDateSafe(data.appliedAt ?? data.appliedDate) || new Date(0);
+          const lastUpd = toDateSafe(data.lastUpdated ?? data.updatedAt);
+
+          // student meta (cached)
+          let studentEmail: string | undefined;
+          let studentName: string | undefined;
+          if (data.studentId) {
+            const cached = studentMetaRef.current.get(data.studentId);
+            if (cached) {
+              studentEmail = cached.email;
+              studentName = cached.name || cached.email;
+            } else {
+              try {
+                const uDoc = await getDoc(doc(db, 'users', data.studentId));
+                if (uDoc.exists()) {
+                  const u = uDoc.data() as any;
+                  studentEmail = u?.email || 'Unknown';
+                  studentName = u?.name || studentEmail;
+                  studentMetaRef.current.set(data.studentId, { email: studentEmail, name: studentName });
+                } else {
+                  const qs = await getDocs(query(collection(db, 'users'), where('id', '==', data.studentId)));
+                  if (!qs.empty) {
+                    const u = qs.docs[0].data() as any;
+                    studentEmail = u?.email || 'Unknown';
+                    studentName = u?.name || studentEmail;
+                    studentMetaRef.current.set(data.studentId, { email: studentEmail, name: studentName });
+                  }
+                }
+              } catch (e) {
+                console.warn('Student meta fetch failed:', e);
+              }
             }
-          } catch (error) {
-            console.error('Error fetching student info:', error);
           }
 
-          appsList.push({
-            id: docSnapshot.id,
-            studentId: data.studentId,
-            jobId: data.jobId,
-            jobTitle: data.jobTitle || jobsList.find(j => j.id === data.jobId)?.title || 'Unknown Position',
-            companyName: data.companyName || jobsList.find(j => j.id === data.jobId)?.companyName || 'Unknown',
-            status: data.status || 'pending',
-            appliedAt: data.appliedAt?.toDate() || new Date(),
-            resume: data.resume || '',
+          // job enrichment
+          const jobFromList = jobs.find((j) => j.id === data.jobId);
+          const jobTitle = data.jobTitle || jobFromList?.title || 'Unknown Position';
+          const companyName = data.companyName || jobFromList?.companyName || 'Unknown';
+
+          const item: ApplicationWithJob = {
+            id: d.id,
+            studentId: String(data.studentId || ''),
+            jobId: String(data.jobId || ''),
+            jobTitle,
+            companyName,
+            status: (data.status ?? 'pending') as AppStatus,
+            appliedAt: applied,           // ✅ required
+            lastUpdated: lastUpd,
+            resume: data.resumeUrl ?? data.resume ?? '',
             coverLetter: data.coverLetter,
             notes: data.notes,
-            studentEmail,
-            studentName,
-          });
-        }
+            studentEmail: studentEmail ?? 'Unknown',
+            studentName: studentName ?? 'Unknown Student',
+          };
 
-        // Sort by application date (newest first)
-        appsList.sort((a, b) => b.appliedAt.getTime() - a.appliedAt.getTime());
-        setApplications(appsList);
-      }
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      // Set mock data for development
-      setApplications([
-        {
-          id: '1',
-          studentId: 'student1',
-          studentName: 'John Doe',
-          studentEmail: 'john@example.com',
-          jobId: 'job1',
-          jobTitle: 'Frontend Developer Intern',
-          companyName: 'TechCorp',
-          status: 'pending',
-          appliedAt: new Date('2024-03-15'),
-          resume: 'resume.pdf',
-          coverLetter: 'I am very interested in this position...',
-        },
-        {
-          id: '2',
-          studentId: 'student2',
-          studentName: 'Jane Smith',
-          studentEmail: 'jane@example.com',
-          jobId: 'job1',
-          jobTitle: 'Frontend Developer Intern',
-          companyName: 'TechCorp',
-          status: 'reviewing',
-          appliedAt: new Date('2024-03-14'),
-          resume: 'resume.pdf',
-          coverLetter: 'With my experience in React...',
-        },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  };
+          return item;
+        })
+      );
 
-  const handleStatusUpdate = async (application: ApplicationWithJob, newStatus: string) => {
-    try {
-      await updateDoc(doc(db, 'applications', application.id), {
-        status: newStatus,
-        updatedAt: new Date(),
+      // Merge by id (for multiple chunk listeners)
+      setApplications((prev) => {
+        const map = new Map<string, ApplicationWithJob>();
+        prev.forEach((p) => map.set(p.id, p));
+        list.forEach((n) => map.set(n.id, n));
+        const arr = Array.from(map.values()).sort((a, b) => {
+          const aT = (a.lastUpdated ?? a.appliedAt)?.getTime?.() ?? 0;
+          const bT = (b.lastUpdated ?? b.appliedAt)?.getTime?.() ?? 0;
+          return bT - aT;
+        });
+        return arr;
       });
+    };
 
-      setApplications(applications.map(app =>
-        app.id === application.id ? { ...app, status: newStatus } : app
-      ));
-    } catch (error) {
-      console.error('Error updating application status:', error);
-    }
-  };
+    primaryUnsub = onSnapshot(qAppsByEmployer, handleAppsSnapshot, (err) => {
+      console.error('Applications listener error:', err);
+      setError('Failed to load applications.');
+      setLoading(false);
+    });
+
+    return () => {
+      if (primaryUnsub) primaryUnsub();
+      if (fallbackUnsubs.length) fallbackUnsubs.forEach((u) => u());
+    };
+  }, [uid, jobs]);
+
+  // ----- Filters / stats -----
+  const filteredApplications = useMemo(() => {
+    return applications.filter((app) => {
+      const matchStatus = filterStatus === 'all' || app.status === filterStatus;
+      const matchJob = filterJob === 'all' || app.jobId === filterJob;
+      return matchStatus && matchJob;
+    });
+  }, [applications, filterStatus, filterJob]);
+
+  const stats = useMemo(() => ({
+    total: applications.length,
+    pending: applications.filter((a) => a.status === 'pending').length,
+    reviewing: applications.filter((a) => a.status === 'reviewing').length,
+    accepted: applications.filter((a) => a.status === 'accepted').length,
+    rejected: applications.filter((a) => a.status === 'rejected').length,
+  }), [applications]);
 
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
@@ -158,23 +253,51 @@ export const EmployerApplicants: React.FC = () => {
       reviewing: 'bg-blue-100 text-blue-800',
       accepted: 'bg-green-100 text-green-800',
       rejected: 'bg-red-100 text-red-800',
+      withdrawn: 'bg-gray-100 text-gray-800',
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
 
-  const filteredApplications = applications.filter(app => {
-    const matchesStatus = filterStatus === 'all' || app.status === filterStatus;
-    const matchesJob = filterJob === 'all' || app.jobId === filterJob;
-    return matchesStatus && matchesJob;
-  });
+  // ----- Accept / Reject / etc. -----
+  const handleStatusUpdate = async (application: ApplicationWithJob, newStatus: AppStatus) => {
+    try {
+      await updateDoc(doc(db, 'applications', application.id), {
+        status: newStatus,
+        lastUpdated: Timestamp.now(),
+      });
 
-  const stats = {
-    total: applications.length,
-    pending: applications.filter(a => a.status === 'pending').length,
-    reviewing: applications.filter(a => a.status === 'reviewing').length,
-    accepted: applications.filter(a => a.status === 'accepted').length,
-    rejected: applications.filter(a => a.status === 'rejected').length,
+      // ✅ functional update returns ApplicationWithJob[]
+      setApplications((prev) =>
+        prev.map((a) =>
+          a.id === application.id ? { ...a, status: newStatus, lastUpdated: new Date() } : a
+        )
+      );
+
+      // Optional: notify the student (works with your bell)
+      if (application.studentId) {
+        await addDoc(collection(db, 'users', application.studentId, 'notifications'), {
+          type: 'application_status',
+          title: `Application ${newStatus}`,
+          body: `${application.companyName || ''} — ${application.jobTitle || ''}`.trim(),
+          appId: application.id,
+          jobId: application.jobId ?? null,
+          status: newStatus,
+          read: false,
+          createdAt: Timestamp.now(),
+        });
+      }
+    } catch (e) {
+      console.error('Error updating application status:', e);
+    }
   };
+
+  if (!uid) {
+    return (
+      <div className="min-h-screen bg-gray-50 grid place-items-center">
+        <p className="text-gray-600">Please sign in as an employer to view applicants.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -197,7 +320,7 @@ export const EmployerApplicants: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
@@ -232,7 +355,7 @@ export const EmployerApplicants: React.FC = () => {
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary"
             >
               <option value="all">All Jobs</option>
-              {jobs.map(job => (
+              {jobs.map((job) => (
                 <option key={job.id} value={job.id}>{job.title}</option>
               ))}
             </select>
@@ -246,11 +369,12 @@ export const EmployerApplicants: React.FC = () => {
               <option value="reviewing">Reviewing</option>
               <option value="accepted">Accepted</option>
               <option value="rejected">Rejected</option>
+              <option value="withdrawn">Withdrawn</option>
             </select>
           </div>
         </div>
 
-        {/* Applications List */}
+        {/* List */}
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
@@ -268,21 +392,11 @@ export const EmployerApplicants: React.FC = () => {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Applicant
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Position
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Applied Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Applicant</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Applied Date</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -290,15 +404,15 @@ export const EmployerApplicants: React.FC = () => {
                   <tr key={app.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div>
-                        <div className="text-sm font-medium text-gray-900">{app.studentName}</div>
-                        <div className="text-sm text-gray-500">{app.studentEmail}</div>
+                        {app.studentName && <div className="text-sm font-medium text-gray-900">{app.studentName}</div>}
+                        {app.studentEmail && <div className="text-sm text-gray-500">{app.studentEmail}</div>}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{app.jobTitle}</div>
+                      <div className="text-sm text-gray-900">{app.jobTitle || 'Unknown Position'}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(app.appliedAt).toLocaleDateString()}
+                      {app.appliedAt ? app.appliedAt.toLocaleDateString() : '—'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(app.status)}`}>
@@ -318,7 +432,7 @@ export const EmployerApplicants: React.FC = () => {
                       {app.status !== 'accepted' && app.status !== 'rejected' && (
                         <select
                           value={app.status}
-                          onChange={(e) => handleStatusUpdate(app, e.target.value)}
+                          onChange={(e) => handleStatusUpdate(app, e.target.value as AppStatus)}
                           className="text-sm border border-gray-300 rounded px-2 py-1"
                         >
                           <option value="pending">Pending</option>
@@ -336,28 +450,32 @@ export const EmployerApplicants: React.FC = () => {
         )}
       </div>
 
-      {/* Application Details Modal */}
+      {/* Modal */}
       {showModal && selectedApplication && (
-        <Modal
-          isOpen={showModal}
-          onClose={() => setShowModal(false)}
-          title="Application Details"
-        >
+        <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="Application Details">
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <h4 className="font-semibold text-gray-900">Applicant</h4>
-                <p className="mt-1 text-gray-600">{selectedApplication.studentName}</p>
-                <p className="text-sm text-gray-500">{selectedApplication.studentEmail}</p>
+                {selectedApplication.studentName && (
+                  <p className="mt-1 text-gray-600">{selectedApplication.studentName}</p>
+                )}
+                {selectedApplication.studentEmail && (
+                  <p className="text-sm text-gray-500">{selectedApplication.studentEmail}</p>
+                )}
               </div>
               <div>
                 <h4 className="font-semibold text-gray-900">Position</h4>
-                <p className="mt-1 text-gray-600">{selectedApplication.jobTitle}</p>
+                <p className="mt-1 text-gray-600">{selectedApplication.jobTitle || 'Unknown Position'}</p>
               </div>
-              <div>
-                <h4 className="font-semibold text-gray-900">Applied Date</h4>
-                <p className="mt-1 text-gray-600">{new Date(selectedApplication.appliedAt).toLocaleString()}</p>
-              </div>
+              {selectedApplication.appliedAt && (
+                <div>
+                  <h4 className="font-semibold text-gray-900">Applied Date</h4>
+                  <p className="mt-1 text-gray-600">
+                    {selectedApplication.appliedAt.toLocaleString()}
+                  </p>
+                </div>
+              )}
               <div>
                 <h4 className="font-semibold text-gray-900">Status</h4>
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedApplication.status)}`}>
@@ -376,7 +494,12 @@ export const EmployerApplicants: React.FC = () => {
             {selectedApplication.resume && (
               <div>
                 <h4 className="font-semibold text-gray-900">Resume</h4>
-                <a href={selectedApplication.resume} target="_blank" rel="noopener noreferrer" className="mt-2 text-primary hover:text-blue-700 inline-flex items-center">
+                <a
+                  href={selectedApplication.resume}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 text-primary hover:text-blue-700 inline-flex items-center"
+                >
                   <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>

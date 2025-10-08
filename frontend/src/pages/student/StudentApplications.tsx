@@ -69,10 +69,10 @@ export const StudentApplications = () => {
     const d = new Date(v);
     return isNaN(d.getTime()) ? undefined : d;
   };
-  
+
   const formatSalary = (raw: any): string | undefined => {
     if (!raw) return undefined;
-  // common shapes: {min,max,currency} | number | string
+    // common shapes: {min,max,currency} | number | string
     if (typeof raw === 'object' && (raw.min !== undefined || raw.max !== undefined)) {
       const cur = raw.currency ?? '';
       const min = raw.min ?? '';
@@ -82,10 +82,9 @@ export const StudentApplications = () => {
       if (max !== '') return `${cur ? cur + ' ' : ''}${max}`;
       return undefined;
     }
-  if (typeof raw === 'number') return String(raw);
-  return String(raw); // already a string
-};
-
+    if (typeof raw === 'number') return String(raw);
+    return String(raw); // already a string
+  };
 
   // Capture a *real* Firebase uid
   useEffect(() => {
@@ -102,6 +101,13 @@ export const StudentApplications = () => {
   useEffect(() => {
     filterApplications();
   }, [applications, selectedStatus, searchTerm]);
+
+  // Auto-hide toast after 3s
+  useEffect(() => {
+    if (!message) return;
+    const t = setTimeout(() => setMessage(null), 3000);
+    return () => clearTimeout(t);
+  }, [message]);
 
   const fetchApplications = async (currUid: string) => {
     try {
@@ -176,8 +182,13 @@ export const StudentApplications = () => {
         })
       );
 
-      // If no appliedDate present, keep a stable order by id
-      rows.sort((a, b) => a.id.localeCompare(b.id));
+      // Newest first: appliedDate, then lastUpdated, then id desc
+      rows.sort((a, b) => {
+        const aTime = (a.appliedDate ?? a.lastUpdated)?.getTime?.() ?? 0;
+        const bTime = (b.appliedDate ?? b.lastUpdated)?.getTime?.() ?? 0;
+        if (aTime !== bTime) return bTime - aTime; // latest first
+        return b.id.localeCompare(a.id); // tie-breaker: id desc
+      });
 
       setApplications(rows);
     } catch (err) {
@@ -208,20 +219,26 @@ export const StudentApplications = () => {
   };
 
   const withdrawApplication = async (applicationId: string) => {
-    if (!confirm('Are you sure you want to withdraw this application?')) return;
+  if (!confirm('Are you sure you want to withdraw this application?')) return;
 
-    try {
-      await updateDoc(doc(db, 'applications', applicationId), {
-        status: 'withdrawn',
-        lastUpdated: Timestamp.now(),
-      });
-      setMessage({ type: 'success', text: 'Your application has been withdrawn.' });
-      if (uid) fetchApplications(uid);
-    } catch (error: any) {
-      console.error('Error withdrawing application:', error?.code, error?.message, error);
-      alert('Failed to withdraw application. Please try again.');
+  try {
+    await updateDoc(doc(db, 'applications', applicationId), {
+      status: 'withdrawn',
+      lastUpdated: Timestamp.now(),
+    });
+
+    setMessage({ type: 'success', text: 'Your application has been withdrawn.' });
+
+    // 🔔 notify the student (your current user)
+    if (uid) {
+      fetchApplications(uid);
     }
-  };
+  } catch (error: any) {
+    console.error('Error withdrawing application:', error);
+    setMessage({ type: 'error', text: 'Failed to withdraw application. Please try again.' });
+  } 
+};
+  
 
   const getStatusBadge = (status: AppStatus) => {
     switch (status) {
@@ -303,6 +320,22 @@ export const StudentApplications = () => {
       <SiteHeader />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Toast message */}
+        {message && (
+          <div
+            className={[
+              'mb-6 rounded-lg border px-4 py-3',
+              message.type === 'success'
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : 'bg-red-50 border-red-200 text-red-800',
+            ].join(' ')}
+            role="status"
+            aria-live="polite"
+          >
+            {message.text}
+          </div>
+        )}
+
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">My Applications</h1>

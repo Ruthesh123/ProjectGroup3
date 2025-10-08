@@ -1,5 +1,6 @@
 import React from 'react';
 import { Job } from '../../types';
+import { Link } from 'react-router-dom';
 
 interface JobCardProps {
   job: Job;
@@ -38,7 +39,14 @@ export const JobCard: React.FC<JobCardProps> = ({
       <div className="flex justify-between items-start mb-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-lg font-semibold text-gray-900 truncate">{job.title}</h3>
+            <h3 className="text-lg font-semibold text-gray-900 truncate">
+              <Link
+                to={`/jobs/${job.id}`}
+                className="hover:underline hover:text-blue-700 transition-colors"
+              >
+                {job.title}
+              </Link>
+            </h3>
             {isSaved && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
                 <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
