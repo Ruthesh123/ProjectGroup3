@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { ProfileDropdown } from '../../components/shared/ProfileDropdown';
 
@@ -12,36 +12,44 @@ interface DashboardStats {
   activeApplications: number;
 }
 
+type RecentApp = {
+  id: string;
+  jobTitle?: string;
+  companyName?: string;
+  status?: string;
+  appliedAt?: any; // Firestore Timestamp | Date
+};
+
 export const AdminDashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+
   const [stats, setStats] = useState<DashboardStats>({
     totalStudents: 0,
     totalEmployers: 0,
     totalJobs: 0,
     activeApplications: 0,
   });
+  const [recentApps, setRecentApps] = useState<RecentApp[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchDashboardStats();
+    fetchRecentApplications();
   }, []);
 
   const fetchDashboardStats = async () => {
     try {
-      // Fetch students count
       const studentsQuery = query(collection(db, 'users'), where('role', '==', 'student'));
-      const studentsSnapshot = await getDocs(studentsQuery);
-
-      // Fetch employers count
       const employersQuery = query(collection(db, 'users'), where('role', '==', 'employer'));
-      const employersSnapshot = await getDocs(employersQuery);
 
-      // Fetch jobs count
-      const jobsSnapshot = await getDocs(collection(db, 'jobs'));
-
-      // Fetch applications count
-      const applicationsSnapshot = await getDocs(collection(db, 'applications'));
+      const [studentsSnapshot, employersSnapshot, jobsSnapshot, applicationsSnapshot] =
+        await Promise.all([
+          getDocs(studentsQuery),
+          getDocs(employersQuery),
+          getDocs(collection(db, 'jobs')),
+          getDocs(collection(db, 'applications')),
+        ]);
 
       setStats({
         totalStudents: studentsSnapshot.size,
@@ -56,6 +64,33 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  const fetchRecentApplications = async () => {
+    try {
+      // IMPORTANT: your schema uses appliedAt
+      const appsQuery = query(
+        collection(db, 'applications'),
+        orderBy('appliedAt', 'desc'),
+        limit(5)
+      );
+      const snapshot = await getDocs(appsQuery);
+
+      const data: RecentApp[] = snapshot.docs.map((d) => {
+        const v = d.data() as any;
+        return {
+          id: d.id,
+          jobTitle: v.jobTitle || 'Unknown Position',
+          companyName: v.companyName || 'Unknown Company',
+          status: v.status || 'pending',
+          appliedAt: v.appliedAt,
+        };
+      });
+
+      setRecentApps(data);
+    } catch (error) {
+      console.error('Error fetching recent applications:', error);
+      setRecentApps([]);
+    }
+  };
 
   if (loading) {
     return (
@@ -65,6 +100,22 @@ export const AdminDashboard: React.FC = () => {
     );
   }
 
+  const formatWhen = (ts: any) => {
+    if (!ts) return '—';
+    const date = ts?.toDate ? ts.toDate() : ts;
+    return new Date(date).toLocaleString();
+  };
+
+  const statusPill = (status?: string) => {
+    const map: Record<string, string> = {
+      pending: 'bg-yellow-100 text-yellow-800',
+      reviewing: 'bg-blue-100 text-blue-800',
+      accepted: 'bg-green-100 text-green-800',
+      rejected: 'bg-red-100 text-red-800',
+    };
+    return map[status || 'pending'] || 'bg-gray-100 text-gray-800';
+  };
+
   return (
     <div className="min-h-screen bg-gray-100">
       {/* Header */}
@@ -72,7 +123,6 @@ export const AdminDashboard: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex justify-between items-center">
             <div className="flex items-center space-x-4">
-              {/* Logo/Brand */}
               <div className="flex items-center">
                 <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
                   <span className="text-white font-bold text-xl">IL</span>
@@ -80,8 +130,6 @@ export const AdminDashboard: React.FC = () => {
                 <h1 className="ml-3 text-xl font-bold text-gray-900">InternLink Admin</h1>
               </div>
             </div>
-
-            {/* Right side - Profile Dropdown */}
             <ProfileDropdown />
           </div>
         </div>
@@ -89,7 +137,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Welcome Section */}
+        {/* Welcome */}
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-gray-900">Welcome back, Admin!</h2>
           <p className="text-gray-600 mt-1">Here's what's happening with your platform today.</p>
@@ -154,7 +202,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Quick Actions */}
+        {/* Quick Actions (unchanged) */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -190,32 +238,29 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Recent Activity */}
+        {/* Recent Applications */}
         <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h2>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between py-2 border-b">
-              <div className="flex items-center">
-                <div className="w-2 h-2 bg-green-500 rounded-full mr-3"></div>
-                <span className="text-sm text-gray-600">New student registration</span>
-              </div>
-              <span className="text-xs text-gray-400">2 minutes ago</span>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Applications</h2>
+          {recentApps.length === 0 ? (
+            <p className="text-gray-500 text-sm">No recent applications found.</p>
+          ) : (
+            <div className="divide-y">
+              {recentApps.map((app) => (
+                <div key={app.id} className="flex items-center justify-between py-3">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{app.jobTitle}</p>
+                    <p className="text-xs text-gray-600">
+                      {app.companyName} •{' '}
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${statusPill(app.status || 'pending')}`}>
+                        {app.status || 'pending'}
+                      </span>
+                    </p>
+                  </div>
+                  <span className="text-xs text-gray-400">{formatWhen(app.appliedAt)}</span>
+                </div>
+              ))}
             </div>
-            <div className="flex items-center justify-between py-2 border-b">
-              <div className="flex items-center">
-                <div className="w-2 h-2 bg-blue-500 rounded-full mr-3"></div>
-                <span className="text-sm text-gray-600">New job posting by TechCorp</span>
-              </div>
-              <span className="text-xs text-gray-400">15 minutes ago</span>
-            </div>
-            <div className="flex items-center justify-between py-2 border-b">
-              <div className="flex items-center">
-                <div className="w-2 h-2 bg-yellow-500 rounded-full mr-3"></div>
-                <span className="text-sm text-gray-600">Application submitted for Software Developer role</span>
-              </div>
-              <span className="text-xs text-gray-400">1 hour ago</span>
-            </div>
-          </div>
+          )}
         </div>
       </main>
     </div>

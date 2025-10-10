@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { addDoc, collection, doc, serverTimestamp } from 'firebase/firestore';
+import type { User as FirebaseUser } from 'firebase/auth';
+import { signInAnonymously } from 'firebase/auth';
+import { db, auth } from '../../config/firebase'; // <-- ensure auth is exported here
 import { useAuth } from '../../contexts/AuthContext';
 import { SiteHeader } from '../../components/shared/SiteHeader';
 
@@ -11,28 +13,17 @@ type TicketForm = {
 };
 
 const FAQ = [
-  {
-    q: 'How do I apply to a job?',
-    a: 'Open a job and click “Apply”. You can upload a PDF resume or paste a resume URL. After submitting, track status on the My Applications page.',
-  },
-  {
-    q: 'How do I save jobs?',
-    a: 'Click the bookmark icon on a job card. View them anytime under Saved Jobs.',
-  },
-  {
-    q: 'Why can’t I post a job?',
-    a: 'Only employer accounts can post jobs. If you need employer access, contact support.',
-  },
-  {
-    q: 'I forgot my password.',
-    a: 'Use the “Forgot password?” link on the login page. You’ll receive a reset email.',
-  },
+  { q: 'How do I apply to a job?', a: 'Open a job and click “Apply”. You can upload a PDF resume or paste a resume URL. After submitting, track status on the My Applications page.' },
+  { q: 'How do I save jobs?', a: 'Click the bookmark icon on a job card. View them anytime under Saved Jobs.' },
+  { q: 'Why can’t I post a job?', a: 'Only employer accounts can post jobs. If you need employer access, contact support.' },
+  { q: 'I forgot my password.', a: 'Use the “Forgot password?” link on the login page. You’ll receive a reset email.' },
 ];
 
 export default function HelpSupport() {
-  const { user } = useAuth();
-  const [openIdx, setOpenIdx] = useState<number | null>(0);
+  // Ensure TS knows this is the Firebase user shape
+  const { user } = useAuth() as { user: FirebaseUser | null };
 
+  const [openIdx, setOpenIdx] = useState<number | null>(0);
   const [form, setForm] = useState<TicketForm>({
     email: user?.email ?? '',
     subject: '',
@@ -44,6 +35,21 @@ export default function HelpSupport() {
 
   const update = (k: keyof TicketForm, v: string) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  // Resolve a UID reliably; anon-sign in if needed (for emulator/demo)
+  const ensureUid = async (): Promise<string | null> => {
+    // Use whichever is available first
+    const existingUid = auth.currentUser?.uid || user?.uid;
+    if (existingUid) return existingUid;
+
+    try {
+      const cred = await signInAnonymously(auth);
+      return cred.user.uid ?? null;
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to sign in.');
+      return null;
+    }
+  };
 
   const submitTicket = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,17 +67,27 @@ export default function HelpSupport() {
 
     try {
       setSubmitting(true);
-      await addDoc(collection(db, 'supportTickets'), {
+
+      // Make sure we have a uid (restored session or anon)
+      const uid = await ensureUid();
+      if (!uid) {
+        setErr('You must be signed in to submit a ticket.');
+        return;
+      }
+
+      // Write under /users/{uid}/supportTickets/{ticketId}
+      const userDocRef = doc(db, 'users', uid);
+      await addDoc(collection(userDocRef, 'supportTickets'), {
         email,
         subject,
         message,
-        userId: user?.id ?? null,
         createdAt: serverTimestamp(),
         status: 'open', // open | pending | resolved
       });
+
       setMsg('Thanks! Your ticket has been submitted. We’ll get back to you soon.');
       setForm({
-        email: user?.email ?? '',
+        email: auth.currentUser?.email ?? user?.email ?? '',
         subject: '',
         message: '',
       });
@@ -111,9 +127,7 @@ export default function HelpSupport() {
                       <span className="font-medium text-gray-900">{item.q}</span>
                       <span className="text-gray-500">{open ? '–' : '+'}</span>
                     </button>
-                    {open && (
-                      <p className="mt-2 text-gray-600">{item.a}</p>
-                    )}
+                    {open && <p className="mt-2 text-gray-600">{item.a}</p>}
                   </div>
                 );
               })}
@@ -176,10 +190,12 @@ export default function HelpSupport() {
 
               <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
                 <a
-                  href={`mailto:support@internlink.example?subject=${encodeURIComponent(form.subject || 'Help request')}&body=${encodeURIComponent(form.message)}`}
+                  href={`mailto:support@internlink.com?subject=${encodeURIComponent(
+                    form.subject || 'Help request'
+                  )}&body=${encodeURIComponent(form.message)}`}
                   className="text-blue-700 hover:underline text-sm"
                 >
-                  Prefer email? Write to support@internlink.example
+                  Prefer email? Write to support@internlink.com
                 </a>
 
                 <button
